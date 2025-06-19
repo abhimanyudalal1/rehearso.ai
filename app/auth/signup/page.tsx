@@ -22,19 +22,49 @@ export default function SignupPage() {
   const [agreedToTerms, setAgreedToTerms] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!agreedToTerms) return
+// Replace the handleSubmit function in your signup page with this:
+const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault()
+  if (!agreedToTerms) {
+    alert('Please agree to the terms and conditions')
+    return
+  }
 
-    setIsLoading(true)
+  if (formData.password !== formData.confirmPassword) {
+    alert('Passwords do not match')
+    return
+  }
 
-    // Simulate signup process
-    setTimeout(() => {
-      setIsLoading(false)
+  setIsLoading(true)
+
+  try {
+    const response = await fetch('http://localhost:4000/api/auth/signup', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(formData),
+    })
+
+    const data = await response.json()
+
+    if (data.success) {
+      // Store token in localStorage
+      localStorage.setItem('token', data.token)
+      localStorage.setItem('user', JSON.stringify(data.user))
+      
       // Redirect to dashboard
       window.location.href = "/dashboard"
-    }, 1500)
+    } else {
+      alert(data.message || 'Signup failed')
+    }
+  } catch (error) {
+    console.error('Signup error:', error)
+    alert('Network error. Please try again.')
+  } finally {
+    setIsLoading(false)
   }
+}
 
   const handleInputChange = (field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }))

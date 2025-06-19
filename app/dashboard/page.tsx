@@ -8,7 +8,7 @@ import { Progress } from "@/components/ui/progress"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Mic, Users, Brain, BarChart3, Plus, Clock, Trophy, TrendingUp, Settings, LogOut } from "lucide-react"
 import Link from "next/link"
-import { db } from "@/lib/database"
+// import { db } from "@/lib/database"
 
 const achievements = [
   { title: "First Session", description: "Complete your first speaking session", earned: false },

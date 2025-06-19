@@ -16,17 +16,42 @@ export default function LoginPage() {
   const [password, setPassword] = useState("")
   const [isLoading, setIsLoading] = useState(false)
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setIsLoading(true)
+// Replace the handleSubmit function in your login page with this:
+const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault()
+  setIsLoading(true)
 
-    // Simulate login process
-    setTimeout(() => {
-      setIsLoading(false)
+  try {
+    const response = await fetch('http://localhost:4000/api/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        email,
+        password,
+      }),
+    })
+
+    const data = await response.json()
+
+    if (data.success) {
+      // Store token in localStorage
+      localStorage.setItem('token', data.token)
+      localStorage.setItem('user', JSON.stringify(data.user))
+      
       // Redirect to dashboard
       window.location.href = "/dashboard"
-    }, 1500)
+    } else {
+      alert(data.message || 'Login failed')
+    }
+  } catch (error) {
+    console.error('Login error:', error)
+    alert('Network error. Please try again.')
+  } finally {
+    setIsLoading(false)
   }
+}
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 flex items-center justify-center p-4">
