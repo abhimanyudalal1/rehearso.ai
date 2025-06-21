@@ -85,11 +85,102 @@ export default function LandingPage() {
       </section>
 
       {/* Features Grid */}
+
       <section className="container mx-auto px-4 py-20">
         <div className="text-center mb-16">
           <h2 className="text-3xl md:text-4xl font-bold mb-4">Everything You Need to Excel</h2>
           <p className="text-xl text-gray-600">Comprehensive tools for public speaking mastery</p>
         </div>
+
+      <section className="bg-white py-20">
+  <div className="container mx-auto px-4 grid lg:grid-cols-2 gap-12 items-center">
+    
+    {/* Left Image */}
+    <div className="w-full">
+      <img
+        src="/54C719FB-2200-4A9A-84C2-FFFD0F45428E.jpeg"
+        alt="Feature Demo"
+        className="rounded-xl shadow-lg w-full"
+      />
+    </div>
+
+    {/* Right Text */}
+    <div>
+      <Badge className="mb-3 bg-green-100 text-green-700">Practice Tools</Badge>
+      <h2 className="text-3xl font-bold mb-4">AI Virtual Audience</h2>
+      <p className="text-gray-600 text-lg mb-6">
+      Practice with our intelligent AI that analyzes your speech patterns, tone, and delivery in real-time
+      </p>
+      <ul className="space-y-3 text-gray-700">
+        <li className="flex items-start">
+          <CheckCircle className="w-5 h-5 text-green-500 mt-1 mr-2" />
+          Safe Practice: Judge-free environment with real-time feedback on delivery and engagement.
+        </li>
+        <li className="flex items-start">
+          <CheckCircle className="w-5 h-5 text-green-500 mt-1 mr-2" />
+          Always Available: 24/7 accessible training that adapts to any skill level or scenario.
+        </li>
+        <li className="flex items-start">
+          <CheckCircle className="w-5 h-5 text-green-500 mt-1 mr-2" />
+          Smart Analytics: AI tracks speech patterns and provides measurable improvement data.
+        </li>
+      </ul>
+      <div className="mt-6">
+        <Button className="bg-gradient-to-r from-blue-600 to-purple-600 text-white">
+          Book a Session
+        </Button>
+      </div>
+    </div>
+  </div>
+</section>
+      {/* <section className="container mx-auto px-4 py-20">
+        <div className="text-center mb-16">
+          <h2 className="text-3xl md:text-4xl font-bold mb-4">Everything You Need to Excel</h2>
+          <p className="text-xl text-gray-600">Comprehensive tools for public speaking mastery</p>
+        </div> */}
+
+
+<section className="bg-white py-20">
+  <div className="container mx-auto px-4 grid lg:grid-cols-2 gap-12 items-center">
+    
+    {/* Left Text */}
+    <div>
+      <Badge className="mb-3 bg-purple-100 text-purple-700">Smart Topic Generator</Badge>
+      <h2 className="text-3xl font-bold mb-4">Smart Topic Generator</h2>
+      <p className="text-gray-600 text-lg mb-6">
+      AI-curated speaking topics from daily life to professional debates with preparation time
+      </p>
+      <ul className="space-y-3 text-gray-700">
+        <li className="flex items-start">
+          <CheckCircle className="w-5 h-5 text-purple-600 mt-1 mr-2" />
+          Context-Aware Suggestions: AI analyzes audience, occasion, and speaker expertise to generate relevant, appropriate topics.
+        </li>
+        <li className="flex items-start">
+          <CheckCircle className="w-5 h-5 text-purple-600 mt-1 mr-2" />
+          Trending Integration: Pulls current events, popular discussions, and timely subjects for fresh, engaging content.
+        </li>
+        <li className="flex items-start">
+          <CheckCircle className="w-5 h-5 text-purple-600 mt-1 mr-2" />
+          Difficulty Scaling: Automatically adjusts topic complexity based on speaker experience and presentation goals.
+        </li>
+      </ul>
+      <div className="mt-6">
+        <Button className="bg-gradient-to-r from-purple-600 to-blue-600 text-white">
+          Practice Interviews
+        </Button>
+      </div>
+    </div>
+
+    {/* Right Image */}
+    <div className="w-full">
+      <img
+        src="/54C719FB-2200-4A9A-84C2-FFFD0F45428E.jpeg"
+        alt="Interview Practice Demo"
+        className="rounded-xl shadow-lg w-full"
+      />
+    </div>
+  </div>
+</section>
 
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
           <Card className="border-0 shadow-lg hover:shadow-xl transition-shadow">
