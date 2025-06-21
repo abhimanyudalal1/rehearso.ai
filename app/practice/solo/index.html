@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Real-time Speech Recognition and Text-to-Speech</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <style>
+        body { font-family: sans-serif; }
+        #feedback { margin-top: 10px; font-size: 1.2rem; }
+        canvas { border: 1px solid #ccc; }
+        .container {
+            display: flex;
+            flex-direction: row;
+            gap: 20px;
+            margin-top: 20px;
+            width: 100%;
+        }
+        .video-section {
+            flex: 1;
+            min-width: 640px;
+        }
+        .streamlit-section {
+            flex: 1;
+            min-height: 480px;
+        }
+        #streamlitFrame {
+            width: 100%;
+            height: 480px;
+            border: 1px solid #ccc;
+        }
+  </style>
+</head>
+<body>
+    <h1>Audio-only Chat</h1>
+    <button id="startButton">Speak</button>
+    <button id="stopButton">Stop</button>
+    <p id="status" style="border: 1px solid black;">Status</p>
+
+    <div class="container">
+        <div class="video-section">
+            <video class="input_video" style="display: none;"></video>
+            <canvas class="output_canvas" width="640px" height="480px"></canvas>
+            <div id="feedback"></div>
+        </div>
+        
+        <div class="streamlit-section">
+            <iframe id="streamlitFrame" src="" style="display: none;"></iframe>
+        </div>
+    </div>
+
+    <script>
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const status = document.getElementById('status');
+        const videoElement = document.getElementsByClassName('input_video')[0];
+        const canvasElement = document.getElementsByClassName('output_canvas')[0];
+        const canvasCtx = canvasElement.getContext('2d');
+        const feedbackEl = document.getElementById("feedback")
+        let ws;
+        let recognition;
+        let sessionTimeoutId;
+
+        function startRecognition() {
+            if ('webkitSpeechRecognition' in window) {
+                recognition = new webkitSpeechRecognition();
+                recognition.continuous = true;
+                recognition.interimResults = false;
+
+                recognition.onstart = () => {
+                    status.innerText = 'Speech recognition is on. Speak into the microphone.';
+                };
+
+                recognition.onresult = (event) => {
+                    let transcript = event.results[event.resultIndex][0].transcript;
+                    ws.send(transcript);
+                };
+
+                recognition.onerror = (event) => {
+                    status.innerText = 'Speech recognition error: ' + event.error;
+                };
+
+                recognition.onend = () => {
+                    recognition.start();
+                };
+
+                recognition.start();
+            } else {
+                status.innerText = 'Your browser does not support Web Speech API.';
+            }
+        }
+        
+        function resetSessionTimeout() {
+            if (sessionTimeoutId) {
+                clearTimeout(sessionTimeoutId);
+            }
+            
+            sessionTimeoutId = setTimeout(() => {
+                if (recognition) {
+                    recognition.onend = null;
+                    recognition.stop();
+                }
+                if (ws) {
+                    ws.close();
+                }
+                status.innerText = 'Session automatically ended after 2 minutes';
+                sessionTimeoutId = null;
+                stopStreamlit();
+            }, 120000); 
+        }
+
+        function startStreamlit() {
+            document.getElementById('streamlitFrame').src = "http://localhost:8501"; 
+            document.getElementById('streamlitFrame').style.display = "block";
+        }
+
+        function stopStreamlit() {
+            document.getElementById('streamlitFrame').style.display = "none";
+            document.getElementById('streamlitFrame').src = "";
+        }
+
+        startButton.onclick = async () => {
+            startStreamlit();
+            camera.start();
+            ws = new WebSocket('ws://127.0.0.1:8000/ws/audio');
+            ws.onopen = () => {
+                startRecognition();
+                resetSessionTimeout();
+            };
+            ws.onmessage = (event) => {
+                status.innerText = event.data;
+            };
+            ws.onerror = (event) => {
+                console.error('WebSocket error:', event);
+                status.innerText = 'WebSocket connection failed';
+            };
+            
+            ws.onclose = () => {
+                if (recognition) {
+                    recognition.onend = null;
+                    recognition.stop();
+                }
+                status.innerText = 'WebSocket disconnected.';
+                if (sessionTimeoutId) {
+                    clearTimeout(sessionTimeoutId);
+                    sessionTimeoutId = null;
+                }
+            };
+        } 
+        
+        stopButton.onclick = () => {
+            stopStreamlit();
+            camera.stop();
+            if (ws) {
+                if (recognition) {
+                    recognition.onend = null;
+                    recognition.stop();
+                }
+                
+                ws.close();
+                if (sessionTimeoutId) {
+                    clearTimeout(sessionTimeoutId);
+                    sessionTimeoutId = null;
+                }
+                status.innerText = 'Connection closed. Click "Speak" to start a new session.';                
+            } else {
+                status.innerText = 'No active connection to close.';
+            }
+        };
+
+        const holistic = new Holistic({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`
+        });
+
+        holistic.setOptions({
+            modelComplexity: 1,
+            smoothLandmarks: true,
+            enableSegmentation: false,
+            refineFaceLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        holistic.onResults(results => {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.restore();
+
+            let feedback = [];
+
+            //posture
+            if (results.poseLandmarks) {
+                const leftShoulder = results.poseLandmarks[11];
+                const rightShoulder = results.poseLandmarks[12];
+                const shoulderTilt = Math.abs(leftShoulder.y - rightShoulder.y);
+                if (shoulderTilt > 0.05) {
+                    feedback.push("🤡 Stand upright: your shoulders seem tilted.");
+                } else {
+                    feedback.push("✅ Good posture.");
+                }
+            }
+
+            // hand movement
+            const handsVisible = results.leftHandLandmarks || results.rightHandLandmarks;
+            if (!handsVisible) {
+                feedback.push("🤡 Try to use more hand gestures");
+            } else {
+                feedback.push("✅ Hands detected good");
+            }
+
+            // mouth open (indicates speaking)
+            if (results.faceLandmarks) {
+                const upperLip = results.faceLandmarks[13];
+                const lowerLip = results.faceLandmarks[14];
+                const mouthOpen = (lowerLip.y - upperLip.y) > 0.015;
+                feedback.push(mouthOpen ? "✅ You're likely speaking." : "🤡 Try to speak up or vary expressions.");
+            }
+
+            feedbackEl.innerHTML = feedback.join("<br>");
+        });
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await holistic.send({ image: videoElement });
+            },
+            width: 640,
+            height: 480
+        });
+    </script>
+</body>
+</html>
