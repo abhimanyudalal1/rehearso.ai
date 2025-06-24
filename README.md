@@ -1,30 +1,106 @@
-# Ai powered speaking room
+# 🎤 Speak AI – Public Speaking Practice Platform
 
-*Automatically synced with your [v0.dev](https://v0.dev) deployments*
+**Speak AI** is an AI-powered web platform that helps users improve their public speaking skills through solo and group sessions. It provides real-time coaching, AI analysis, peer evaluation, and post-session feedback focused on voice clarity, confidence, gestures, and body language.
 
-[![Deployed on Vercel](https://img.shields.io/badge/Deployed%20on-Vercel-black?style=for-the-badge&logo=vercel)](https://vercel.com/yashikas-projects-1a95f951/v0-ai-powered-speaking-room)
-[![Built with v0](https://img.shields.io/badge/Built%20with-v0.dev-black?style=for-the-badge)](https://v0.dev/chat/projects/3JCFUOJrXRw)
+---
 
-## Overview
+## 🧩 The Problem We're Solving
 
-This repository will stay in sync with your deployed chats on [v0.dev](https://v0.dev).
-Any changes you make to your deployed app will be automatically pushed to this repository from [v0.dev](https://v0.dev).
+Public speaking isn’t just uncomfortable—it’s terrifying. Studies show that **77% of people fear public speaking more than death itself**. Yet, despite this widespread fear, there’s a lack of intelligent, affordable, and accessible tools that provide **personalized and real-time** feedback. Traditional coaching is generic, expensive, and not scalable. That’s where **Speak AI** steps in.
 
-## Deployment
+---
 
-Your project is live at:
+## 💡 Our Solution: Speak AI
 
-**[https://vercel.com/yashikas-projects-1a95f951/v0-ai-powered-speaking-room](https://vercel.com/yashikas-projects-1a95f951/v0-ai-powered-speaking-room)**
+An AI-powered platform combining speech recognition, computer vision, and NLP to provide meaningful public speaking practice experiences.
 
-## Build your app
+### 🔹 Solo Practice Mode – ✅ Fully Functional
 
-Continue building your app on:
+- AI-generated topics with 1-minute preparation time
+- Real-time visual coaching cues (e.g., "Avoid fillers", "Maintain eye contact")
+- Live video feedback on posture, confidence, gestures
+- Post-session analytics with improvement suggestions  
+🟢 **This mode is live and shown through `index.html`**
 
-**[https://v0.dev/chat/projects/3JCFUOJrXRw](https://v0.dev/chat/projects/3JCFUOJrXRw)**
+### 🔹 Group Discussion Mode – 🚧 In Development
 
-## How It Works
+- Virtual practice rooms with structured speaking turns
+- Peer feedback and scoring
+- Leaderboards and collaborative growth  
+🛠️ **Integration and backend 80% complete – launching soon!**
 
-1. Create and modify your project using [v0.dev](https://v0.dev)
-2. Deploy your chats from the v0 interface
-3. Changes are automatically pushed to this repository
-4. Vercel deploys the latest version from this repository
+---
+
+## 🛠️ Tech Stack
+
+### 🔹 Frontend
+- Next.js (React)
+- Tailwind CSS
+- Lucide Icons
+- ShadCN UI
+- Animate.css
+
+### 🔹 Backend
+- Node.js & Express.js
+- MongoDB + Mongoose
+- JWT Authentication
+
+### 🔹 AI/ML Integration
+- Google Gemini API
+- Streamlit + Librosa + OpenCV for speech & facial analysis
+
+---
+
+## 📂 Folder Structure
+
+public-speaking/
+├── frontend/
+│ ├── app/
+│ ├── components/
+│ ├── lib/
+│ └── pages/
+├── backend/
+│ ├── models/
+│ ├── routes/
+│ ├── server.js
+│ └── streamlit_app.py
+└── index.html
+
+---
+
+## ⚙️ Setup Instructions
+
+### 1. Clone the Repository
+```bash
+git clone https://github.com/yourusername/public-speaking.git
+cd public-speaking
+2. Install Dependencies
+Frontend
+
+
+cd frontend
+npm install
+Backend
+
+
+cd ../backend
+npm install
+3. Add Environment Variables
+Create a .env file in backend/:
+
+
+MONGO_URI=your_mongodb_uri
+JWT_SECRET=your_secret
+GEMINI_API_KEY_1=your_gemini_key
+GEMINI_API_KEY_2=your_gemini_key
+GEMINI_API_KEY_3=your_gemini_key
+4. Start the Servers
+Backend
+
+cd backend
+node server.js
+Frontend
+
+
+cd frontend
+npm run dev
