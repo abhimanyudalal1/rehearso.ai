@@ -1,17 +1,17 @@
-const express = require('express')
-const mongoose = require('mongoose')
-const cors = require('cors')
-const path = require('path')
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const path = require('path');
 
 require('dotenv').config();
 
-const app = express()
-const PORT = process.env.PORT || 5000
-const MONGOOSE_URI = process.env.MONGOOSE_URI
+const app = express();
+const PORT = process.env.PORT || 5000;
+const MONGOOSE_URI = process.env.MONGOOSE_URI;
 
 // Middleware
-app.use(express.json({ limit: '10mb' }))
-app.use(express.urlencoded({ extended: true }))
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 
 // CORS configuration
 app.use(cors({
@@ -19,43 +19,47 @@ app.use(cors({
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
-}))
+}));
 
-// Routes
-const authRoutes = require('./routes/auth')
-// const speechRoutes = require('./routes/speech') // You can add this later
-// const userRoutes = require('./routes/users') // If you want to keep some user routes
+// Import Routes
+const authRoutes = require('./routes/auth'); // Assuming auth.js has /login, /register, /me etc.
+const sessionsRoutes = require('./routes/sessions'); // New: Import sessions route
+const userDataRoutes = require('./routes/userData'); // Existing
+const userDashboardRoutes = require('./routes/userDashboard'); // Existing
 
-app.use(authRoutes)
-// app.use(speechRoutes)
-// app.use(userRoutes)
+// Mount Routes with specific base paths
+app.use('/api/auth', authRoutes); // CORRECTED: Mount auth routes under /api/auth
+app.use('/api', sessionsRoutes); // Mount sessions routes under /api/sessions (as defined in sessions.js)
+app.use('/api', userDataRoutes); // Mount userData routes under /api/userdata (as defined in userData.js)
+app.use('/api', userDashboardRoutes); // Mount userDashboard routes under /api/userstats and /api/usersessions
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    success: true, 
+  res.json({
+    success: true,
     message: 'SpeakAI Backend is running!',
     timestamp: new Date().toISOString()
-  })
-})
+  });
+});
 
-// Error handling middleware
+// Error handling middleware (keep this before 404 handler)
 app.use((err, req, res, next) => {
-  console.error(err.stack)
+  console.error(err.stack);
   res.status(500).json({
     success: false,
     message: 'Something went wrong!',
     error: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error'
-  })
-})
+  });
+});
 
-// 404 handler
+// 404 handler (this should be the very last route/middleware)
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
-    message: 'Route not found'
-  })
-})
+    message: `Route not found: ${req.originalUrl}` // Added req.originalUrl for better debugging
+  });
+});
+
 
 // Start server
 async function startServer() {
@@ -63,24 +67,24 @@ async function startServer() {
     await mongoose.connect(MONGOOSE_URI, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
-    })
-    console.log('✅ Connected to MongoDB')
-    
+    });
+    console.log('✅ Connected to MongoDB');
+
     app.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`)
-      console.log(`📍 Health check: http://localhost:${PORT}/api/health`)
-    })
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`📍 Health check: http://localhost:${PORT}/api/health`);
+    });
   } catch (error) {
-    console.error('❌ Failed to start server:', error.message)
-    process.exit(1)
+    console.error('❌ Failed to start server:', error.message);
+    process.exit(1);
   }
 }
 
-startServer()
+startServer();
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
-  console.log('\n🛑 Shutting down server...')
-  await mongoose.connection.close()
-  process.exit(0)
-})
+  console.log('\n🛑 Shutting down server...');
+  await mongoose.connection.close();
+  process.exit(0);
+});

@@ -1,4 +1,4 @@
-"use client"
+"use client" // This must be at the very top of the file
 
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
@@ -8,13 +8,39 @@ import { Progress } from "@/components/ui/progress"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Mic, Users, Brain, BarChart3, Plus, Clock, Trophy, TrendingUp, Settings, LogOut } from "lucide-react"
 import Link from "next/link"
-// import { db } from "@/lib/database"
+// import { db } from "@/lib/database" // This is commented out, which is fine for frontend
 
 const achievements = [
   { title: "First Session", description: "Complete your first speaking session", earned: false },
   { title: "Weekly Goal", description: "Reach your weekly goal of 5 sessions", earned: false },
   { title: "Level Up", description: "Advance to the next level", earned: false },
 ]
+
+// Define the structure of a session item for better type safety and clarity
+interface SessionItem {
+  id: string;
+  type: string;
+  topic: string;
+  score: number;
+  date: string;
+}
+
+// Define the structure of raw session data from the backend
+interface RawSessionData {
+  _id: string;
+  type: "solo" | "group";
+  title?: string; // Assuming 'title' is used for the topic in your backend session schema
+  feedback?: {
+    overallScore?: number;
+  };
+  createdAt: string;
+  // Add other properties if your backend session object has them
+}
+
+
+// Define the backend URL using environment variable
+const BACKEND_URL = process.env.NEXT_PUBLIC_NODE_BACKEND_URL || 'http://localhost:4000';
+
 
 export default function Dashboard() {
   const [user, setUser] = useState({
@@ -29,45 +55,96 @@ export default function Dashboard() {
     bestScore: 0,
   })
 
-  const [recentSessions, setRecentSessions] = useState([])
+  // Initialize as an empty array of SessionItem to prevent map errors and provide type safety
+  const [recentSessions, setRecentSessions] = useState<SessionItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
     const loadUserData = async () => {
+      setIsLoading(true); // Ensure loading state is true at the start of the fetch
       try {
-        // Replace 'current-user-id' with actual user ID from auth
-        const userId = "current-user-id"
+        // TODO: Replace with actual ID from authenticated user (e.g., from a token/cookie)
+        // Use a valid MongoDB ObjectId if testing directly and you have a user in DB
+        const userId = "60c72b2f9f1b2c001c8e4d1a"; // Example: replace with actual user ID from your DB
 
-        // Load user stats
-        const stats = await db.getUserStats(userId)
+
+        // --- 1. Fetch stats ---
+        let statsData = { totalSessions: 0, thisWeekSessions: 0, averageScore: 0, bestScore: 0 };
+        try {
+          const statsRes = await fetch(`${BACKEND_URL}/api/userstats/${userId}`);
+          if (statsRes.ok) {
+            const data = await statsRes.json();
+            statsData = {
+              totalSessions: data.totalSessions || 0,
+              thisWeekSessions: data.thisWeekSessions || 0,
+              averageScore: data.averageScore || 0,
+              bestScore: data.bestScore || 0,
+            };
+          } else {
+            console.error(`Failed to fetch stats: ${statsRes.status} ${statsRes.statusText}`);
+            // Optionally log response body for more details
+            const errorText = await statsRes.text();
+            console.error("Stats Error Details:", errorText);
+          }
+        } catch (error) {
+          console.error("Error fetching user stats:", error);
+        }
+
+        // --- 2. Fetch sessions ---
+        let fetchedSessions: RawSessionData[] = []; // Declare type for clarity
+        try {
+          const sessionsRes = await fetch(`${BACKEND_URL}/api/usersessions/${userId}?limit=3`);
+          if (sessionsRes.ok) {
+            const rawSessions = await sessionsRes.json();
+            // This is the CRUCIAL CHECK: Ensure rawSessions is an array before processing
+            if (Array.isArray(rawSessions)) {
+              fetchedSessions = rawSessions;
+            } else {
+              console.warn("Sessions API did not return an array. Received:", rawSessions);
+              fetchedSessions = []; // Fallback to empty array if not an array
+            }
+          } else {
+            console.error(`Failed to fetch sessions: ${sessionsRes.status} ${sessionsRes.statusText}`);
+            // Optionally log response body for more details
+            const errorText = await sessionsRes.text();
+            console.error("Sessions Error Details:", errorText);
+          }
+        } catch (error) {
+          console.error("Error fetching user sessions:", error);
+        }
+
+        // --- Update state with fetched data ---
         setUser((prev) => ({
           ...prev,
-          totalSessions: stats.totalSessions,
-          completedThisWeek: stats.thisWeekSessions,
-          averageScore: stats.averageScore,
-          bestScore: stats.bestScore,
-        }))
+          totalSessions: statsData.totalSessions,
+          completedThisWeek: statsData.thisWeekSessions,
+          averageScore: statsData.averageScore,
+          bestScore: statsData.bestScore,
+        }));
 
-        // Load recent sessions
-        const sessions = await db.getUserSessions(userId, 3)
+        // Now, `fetchedSessions` is guaranteed to be an array, even if empty or if fetch failed.
         setRecentSessions(
-          sessions.map((session) => ({
-            id: session.id,
-            type: session.type === "solo" ? "Solo Practice" : "Group Session",
-            topic: session.topic,
-            score: session.overall_score,
-            date: new Date(session.created_at).toLocaleDateString(),
-          })),
-        )
-      } catch (error) {
-        console.error("Error loading user data:", error)
-      } finally {
-        setIsLoading(false)
-      }
-    }
+          fetchedSessions.map((session) => ({
+            id: session._id,
+            type: session.type === "solo" ? "Solo Practice" : (session.type === "group" ? "Group Session" : "Other"),
+            topic: session.title || "Untitled", // Changed from session.topic to session.title based on schema
+            score: session.feedback?.overallScore || 0,
+            date: new Date(session.createdAt).toLocaleDateString(),
+          }))
+        );
 
-    loadUserData()
-  }, [])
+      } catch (error) {
+        // This catch block will primarily catch errors from the `fetch` calls themselves,
+        // not usually type errors from `map` if the above checks are in place.
+        console.error("Caught an unexpected error during user data loading:", error);
+      } finally {
+        setIsLoading(false); // Ensure loading state is set to false even if errors occur
+      }
+    };
+
+    loadUserData();
+  }, []); // Empty dependency array means this runs once on component mount
+
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -207,23 +284,27 @@ export default function Dashboard() {
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-4">
-                      {recentSessions.map((session) => (
-                        <div key={session.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                          <div className="flex-1">
-                            <div className="flex items-center space-x-2 mb-1">
-                              <Badge variant={session.type === "Solo Practice" ? "default" : "secondary"}>
-                                {session.type}
-                              </Badge>
-                              <span className="text-sm text-gray-500">{session.date}</span>
+                      {recentSessions.length > 0 ? ( // Added check for empty array
+                        recentSessions.map((session) => (
+                          <div key={session.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                            <div className="flex-1">
+                              <div className="flex items-center space-x-2 mb-1">
+                                <Badge variant={session.type === "Solo Practice" ? "default" : "secondary"}>
+                                  {session.type}
+                                </Badge>
+                                <span className="text-sm text-gray-500">{session.date}</span>
+                              </div>
+                              <h4 className="font-medium">{session.topic}</h4>
                             </div>
-                            <h4 className="font-medium">{session.topic}</h4>
+                            <div className="text-right">
+                              <div className="text-2xl font-bold text-blue-600">{session.score}</div>
+                              <div className="text-xs text-gray-500">Score</div>
+                            </div>
                           </div>
-                          <div className="text-right">
-                            <div className="text-2xl font-bold text-blue-600">{session.score}</div>
-                            <div className="text-xs text-gray-500">Score</div>
-                          </div>
-                        </div>
-                      ))}
+                        ))
+                      ) : (
+                        <p className="text-center text-gray-500">No recent sessions found. Start practicing!</p>
+                      )}
                     </div>
                     <Button variant="outline" className="w-full mt-4">
                       View All Sessions

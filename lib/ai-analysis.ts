@@ -1,86 +1,35 @@
-import { generateText } from "ai"
-import { openai } from "@ai-sdk/openai"
+// lib\ai-analysis.ts
 
-export interface SpeechAnalysis {
-  overallScore: number
-  voiceClarity: number
-  confidence: number
-  bodyLanguage: number
-  eyeContact: number
-  grammarScore: number
-  vocabularyScore: number
-  pacingScore: number
-  volumeScore: number
-  strengths: string[]
-  improvements: string[]
-  recommendation: string
-}
+import { generateText } from "ai";
+// import { openai } from "@ai-sdk/openai"; // REMOVE OR COMMENT OUT THIS LINE
+import { google } from "@ai-sdk/google"; // ADD THIS LINE
 
-export interface LiveFeedback {
-  type: "positive" | "warning" | "suggestion"
-  message: string
-  timestamp: number
-}
+// ... (rest of your interfaces and class) ...
 
 export class AIAnalysisEngine {
-  private feedbackMessages = {
-    positive: [
-      "Great eye contact! Keep it up.",
-      "Your posture looks confident",
-      "Nice hand gestures - they support your message",
-      "Excellent voice modulation",
-      "Strong opening statement",
-      "Good pacing - easy to follow",
-    ],
-    warning: [
-      "Try to reduce filler words like 'um' and 'uh'",
-      "Consider speaking a bit louder",
-      "Maintain more consistent eye contact",
-      "Try to stand straighter",
-      "Avoid looking down too often",
-    ],
-    suggestion: [
-      "Take a brief pause to emphasize key points",
-      "Use more hand gestures to engage audience",
-      "Vary your tone to maintain interest",
-      "Try moving slightly to engage different areas",
-      "Consider using more specific examples",
-    ],
-  }
-
-  generateLiveFeedback(): LiveFeedback {
-    const types: Array<"positive" | "warning" | "suggestion"> = ["positive", "warning", "suggestion"]
-    const type = types[Math.floor(Math.random() * types.length)]
-    const messages = this.feedbackMessages[type]
-    const message = messages[Math.floor(Math.random() * messages.length)]
-
-    return {
-      type,
-      message,
-      timestamp: Date.now(),
-    }
-  }
+  // ... (your existing feedbackMessages and generateLiveFeedback method) ...
 
   async generateTopics(category: string, count = 5): Promise<string[]> {
     try {
       const { text } = await generateText({
-        model: openai("gpt-4o"),
-        prompt: `Generate ${count} engaging public speaking topics for the category "${category}". 
+        model: google("models/gemini-pro"), // CHANGED: Use google() and specify the Gemini Pro model
+        // OR model: google("models/gemini-1.5-pro-latest"), // For the latest powerful model
+        prompt: `Generate <span class="math-inline">\{count\} engaging public speaking topics for the category "</span>{category}".
         Topics should be:
         - Thought-provoking but accessible
         - Suitable for 2-5 minute speeches
         - Encouraging personal reflection or opinion
         - Varied in scope and approach
-        
+
         Return only the topics, one per line, without numbering.`,
-      })
+      });
 
       return text
         .split("\n")
         .filter((topic) => topic.trim().length > 0)
-        .slice(0, count)
+        .slice(0, count);
     } catch (error) {
-      console.error("Error generating topics:", error)
+      console.error("Error generating topics:", error);
       // Fallback topics
       return [
         "Describe a moment that changed your perspective",
@@ -88,7 +37,7 @@ export class AIAnalysisEngine {
         "How has technology improved your daily life?",
         "What advice would you give your younger self?",
         "Describe your ideal work environment",
-      ]
+      ];
     }
   }
 
@@ -96,15 +45,16 @@ export class AIAnalysisEngine {
     transcript: string,
     duration: number,
     metrics: {
-      fillerWordCount: number
-      averageVolume: number
-      eyeContactPercentage: number
-      gestureCount: number
+      fillerWordCount: number;
+      averageVolume: number;
+      eyeContactPercentage: number;
+      gestureCount: number;
     },
   ): Promise<SpeechAnalysis> {
     try {
       const { text } = await generateText({
-        model: openai("gpt-4o"),
+        model: google("models/gemini-pro"), // CHANGED: Use google() and specify the Gemini Pro model
+        // OR model: google("models/gemini-1.5-pro-latest"), // For the latest powerful model
         prompt: `Analyze this speech transcript and provide detailed feedback:
 
         Transcript: "${transcript}"
@@ -123,39 +73,14 @@ export class AIAnalysisEngine {
           "improvements": ["improvement1", "improvement2", "improvement3"],
           "recommendation": "detailed recommendation paragraph"
         }`,
-      })
+      });
 
-      const aiAnalysis = JSON.parse(text)
+      const aiAnalysis = JSON.parse(text);
 
-      // Calculate derived scores
-      const voiceClarity = Math.max(0, 100 - metrics.fillerWordCount * 5)
-      const confidence = Math.min(100, metrics.averageVolume * 0.8 + metrics.eyeContactPercentage * 0.2)
-      const bodyLanguage = Math.min(100, metrics.eyeContactPercentage * 0.6 + metrics.gestureCount * 2)
-      const overallScore = Math.round(
-        aiAnalysis.grammarScore * 0.2 +
-          aiAnalysis.vocabularyScore * 0.2 +
-          voiceClarity * 0.2 +
-          confidence * 0.2 +
-          bodyLanguage * 0.2,
-      )
+      // ... (rest of your analysis logic) ...
 
-      return {
-        overallScore,
-        voiceClarity,
-        confidence,
-        bodyLanguage,
-        eyeContact: metrics.eyeContactPercentage,
-        grammarScore: aiAnalysis.grammarScore,
-        vocabularyScore: aiAnalysis.vocabularyScore,
-        pacingScore: duration > 0 ? Math.min(100, (transcript.split(" ").length / duration) * 60) : 0,
-        volumeScore: metrics.averageVolume,
-        strengths: aiAnalysis.strengths,
-        improvements: aiAnalysis.improvements,
-        recommendation: aiAnalysis.recommendation,
-      }
     } catch (error) {
-      console.error("Error analyzing speech:", error)
-
+      console.error("Error analyzing speech:", error);
       // Fallback analysis
       return {
         overallScore: 75,
@@ -171,9 +96,9 @@ export class AIAnalysisEngine {
         improvements: ["Reduce filler words", "Maintain more eye contact", "Use more varied vocabulary"],
         recommendation:
           "Focus on practicing without filler words and maintaining consistent eye contact with your audience.",
-      }
+      };
     }
   }
 }
 
-export const aiAnalysis = new AIAnalysisEngine()
+export const aiAnalysis = new AIAnalysisEngine();

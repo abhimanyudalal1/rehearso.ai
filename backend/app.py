@@ -1,9 +1,9 @@
 """
 Note (for Yashika and Divyansh): in the .env file put the 3 Gemini Api keys as follows (follow the exact structure):
 
-GEMINI_API_KEY_1 = 
-GEMINI_API_KEY_2 = 
-GEMINI_API_KEY_3 = 
+GEMINI_API_KEY_1 =
+GEMINI_API_KEY_2 =
+GEMINI_API_KEY_3 =
 
 """
 
@@ -17,12 +17,14 @@ import os
 from key_manager import APIKeyManager
 from dotenv import load_dotenv
 load_dotenv()
-API_KEY = os.getenv("GOOGLE_API")
+
+# Use the API_KEY_1 as default, KeyManager handles rotation
+# API_KEY = os.getenv("GOOGLE_API") # This variable is not used if you rely on KeyManager fully.
 
 base_prompt = """
-You are a speech specialist, based on the text input you will recieve, assess the speech based on grammar and other public speaking skill such that the user can
-learn how to improve there speech.
-Keep it short, only 2-3 lines.
+You are a speech specialist. Based on the text input you will receive, assess the speech based on grammar, fluency, and other public speaking skills such that the user can
+learn how to improve their speech.
+Keep your feedback concise, only 2-3 lines.
 Here is the speech:
 {text}
 """
@@ -35,10 +37,10 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  
-    allow_headers=["*"], 
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 start_time = time.time()
@@ -59,10 +61,9 @@ manager = ConnectionManager()
 
 def get_llm():
     return ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash", 
+        model="gemini-2.0-flash",
         google_api_key=key_manager.get_next_key()
     )
-
 
 async def call_gemini(message):
     llm = get_llm()
@@ -76,21 +77,27 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             try:
+                # Expecting interim or final transcripts from frontend
                 data = await websocket.receive_text()
-                print(type(data))
-                print(f"Received text: {data}")
-                
+                # print(f"Received text: {data}") # Uncomment for debugging
+
+                # Call Gemini for feedback
                 res = await call_gemini(data)
-                    
-                print(res)
+
+                # print(f"Sending feedback: {res}") # Uncomment for debugging
                 await manager.send_text(res, websocket)
-                    
-                
+
             except WebSocketDisconnect:
+                print(f"WebSocket disconnected: {websocket}")
                 await manager.disconnect(websocket)
                 break
             except Exception as e:
-                print(f"Error: {str(e)}")
+                print(f"Error in websocket_endpoint: {str(e)}")
                 break
     finally:
         await manager.disconnect(websocket)
+
+# Add a simple health check or root endpoint
+@app.get("/")
+async def read_root():
+    return {"message": "SpeakAI FastAPI backend is running!"}
