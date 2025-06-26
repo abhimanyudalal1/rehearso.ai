@@ -43,7 +43,16 @@ export default function SoloPracticePage() {
   const [speechMetrics, setSpeechMetrics] = useState<SpeechMetrics | null>(null)
   const [analysisResult, setAnalysisResult] = useState<SpeechAnalysis | null>(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
-
+  const [sessionData, setSessionData] = useState({
+  mediapipe_data: {
+    session_duration: 0,
+    good_posture_seconds: 0,
+    hand_gestures_seconds: 0,
+    speaking_seconds: 0
+  },
+  text_chunks: []
+})
+const [finalReport, setFinalReport] = useState("")
   const videoRef = useRef<HTMLVideoElement>(null)
   const timerRef = useRef<NodeJS.Timeout>()
   const mediaStreamRef = useRef<MediaStream | null>(null)
@@ -269,69 +278,158 @@ useEffect(() => {
       mediaStreamRef.current = null
     }
   }
-  // Update the handleStopRecording function to analyze speech
-  const handleStopRecording = async () => {
-    setIsRecording(false)
-    setIsAnalyzing(true)
-    stopMediaDevices()
-    try {
-      // Get speech metrics
-      const metrics = speechRecognition.stopRecording()
-      setSpeechMetrics(metrics)
+  // Add this function after the stopMediaDevices function around line 281
+const collectSessionDataAndGenerateReport = async () => {
+  try {
+    // Get session data from iframe
+    const iframe = document.querySelector('iframe[title="MediaPipe Analysis"]') as HTMLIFrameElement
+    if (iframe && iframe.contentWindow) {
+      iframe.contentWindow.postMessage({ action: "getSessionData" }, "*")
+    }
 
-      // Analyze speech with AI
-      const analysis = await aiAnalysis.analyzeSpeech(metrics.transcript, metrics.duration, {
-        fillerWordCount: metrics.fillerWordCount,
-        averageVolume: metrics.averageVolume,
-        eyeContactPercentage: metrics.eyeContactPercentage,
-        gestureCount: metrics.gestureCount,
-      })
-      setAnalysisResult(analysis)
-
-      // Save session to MongoDB backend
-      try {
-        await db.createSession({
-          title: `Solo Practice: ${currentTopic.substring(0, 50)}...`,
-          content: currentTopic,
-          duration: metrics.duration,
-          feedback: {
-            overallScore: analysis.overallScore,
-            clarity: analysis.voiceClarity,
-            pace: analysis.pacingScore,
-            confidence: analysis.confidence,
-            suggestions: [...analysis.strengths, ...analysis.improvements],
+    // Listen for session data from iframe
+    const handleMessage = async (event: MessageEvent) => {
+      if (event.data.type === "sessionData") {
+        const data = event.data.data
+        
+        // Send data to backend
+        const response = await fetch("http://localhost:8000/submit-session-data", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
           },
+          body: JSON.stringify({
+            mediapipe_data: {
+              session_duration: data.sessionDuration,
+              good_posture_seconds: data.goodPostureSeconds,
+              hand_gestures_seconds: data.handGesturesSeconds,
+              speaking_seconds: data.speakingSeconds
+            },
+            text_chunks: data.textChunks
+          })
         })
-      } catch (dbError) {
-        console.error("Error saving session:", dbError)
+
+        if (response.ok) {
+          const result = await response.json()
+          setFinalReport(result.report)
+        } else {
+          console.error("Failed to generate report")
+        }
+        
+        window.removeEventListener("message", handleMessage)
       }
-    } catch (error) {
-      console.error("Error analyzing speech:", error)
-      // Fallback analysis
-      setAnalysisResult({
-        overallScore: 75,
-        voiceClarity: 80,
-        confidence: 70,
-        bodyLanguage: 75,
-        eyeContact: 75,
-        grammarScore: 85,
-        vocabularyScore: 80,
-        pacingScore: 75,
-        volumeScore: 70,
-        strengths: ["Clear articulation", "Good content structure", "Appropriate speaking pace"],
-        improvements: ["Reduce filler words", "Maintain more eye contact", "Use more varied vocabulary"],
-        recommendation:
-          "Focus on practicing without filler words and maintaining consistent eye contact with your audience.",
-      })
-    } finally {
-      setIsAnalyzing(false)
-      setCurrentStep("feedback")
     }
 
-    if (timerRef.current) {
-      clearTimeout(timerRef.current)
-    }
+    window.addEventListener("message", handleMessage)
+  } catch (error) {
+    console.error("Error generating report:", error)
   }
+}
+// Add this function after collectSessionDataAndGenerateReport
+const downloadReport = () => {
+  const reportContent = `
+Speech Analysis Report
+======================
+
+Session Topic: ${currentTopic}
+Duration: ${speechMetrics?.duration || 0} seconds
+
+AI-Generated Analysis:
+${finalReport}
+
+Performance Metrics:
+- Overall Score: ${analysisResult?.overallScore || 'N/A'}
+- Voice Clarity: ${analysisResult?.voiceClarity || 'N/A'}
+- Body Language: ${analysisResult?.bodyLanguage || 'N/A'}
+- Confidence: ${analysisResult?.confidence || 'N/A'}
+
+Strengths:
+${analysisResult?.strengths?.map(s => `- ${s}`).join('\n') || 'N/A'}
+
+Areas for Improvement:
+${analysisResult?.improvements?.map(i => `- ${i}`).join('\n') || 'N/A'}
+
+Generated on: ${new Date().toLocaleString()}
+  `
+
+  const blob = new Blob([reportContent], { type: 'text/plain' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `speech-analysis-${new Date().toISOString().split('T')[0]}.txt`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+  // Update the handleStopRecording function to analyze speech
+  // Replace the handleStopRecording function around line 240
+const handleStopRecording = async () => {
+  setIsRecording(false)
+  setIsAnalyzing(true)
+  stopMediaDevices()
+  
+  try {
+    // Get speech metrics
+    const metrics = speechRecognition.stopRecording()
+    setSpeechMetrics(metrics)
+
+    // Analyze speech with AI
+    const analysis = await aiAnalysis.analyzeSpeech(metrics.transcript, metrics.duration, {
+      fillerWordCount: metrics.fillerWordCount,
+      averageVolume: metrics.averageVolume,
+      eyeContactPercentage: metrics.eyeContactPercentage,
+      gestureCount: metrics.gestureCount,
+    })
+    setAnalysisResult(analysis)
+
+    // Collect session data and generate report
+    await collectSessionDataAndGenerateReport()
+
+    // Save session to MongoDB backend
+    try {
+      await db.createSession({
+        title: `Solo Practice: ${currentTopic.substring(0, 50)}...`,
+        content: currentTopic,
+        duration: metrics.duration,
+        feedback: {
+          overallScore: analysis.overallScore,
+          clarity: analysis.voiceClarity,
+          pace: analysis.pacingScore,
+          confidence: analysis.confidence,
+          suggestions: [...analysis.strengths, ...analysis.improvements],
+        },
+      })
+    } catch (dbError) {
+      console.error("Error saving session:", dbError)
+    }
+  } catch (error) {
+    console.error("Error analyzing speech:", error)
+    // Fallback analysis
+    setAnalysisResult({
+      overallScore: 75,
+      voiceClarity: 80,
+      confidence: 70,
+      bodyLanguage: 75,
+      eyeContact: 75,
+      grammarScore: 85,
+      vocabularyScore: 80,
+      pacingScore: 75,
+      volumeScore: 70,
+      strengths: ["Clear articulation", "Good content structure", "Appropriate speaking pace"],
+      improvements: ["Reduce filler words", "Maintain more eye contact", "Use more varied vocabulary"],
+      recommendation:
+        "Focus on practicing without filler words and maintaining consistent eye contact with your audience.",
+    })
+  } finally {
+    setIsAnalyzing(false)
+    setCurrentStep("feedback")
+  }
+
+  if (timerRef.current) {
+    clearTimeout(timerRef.current)
+  }
+}
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -339,16 +437,27 @@ useEffect(() => {
     return `${mins}:${secs.toString().padStart(2, "0")}`
   }
 
-  const resetSession = () => {
-    setCurrentStep("setup")
-    setIsRecording(false)
-    setTimeRemaining(0)
-    setLiveFeedback([])
-    setCurrentTopic("")
+  // Replace the resetSession function around line 309
+const resetSession = () => {
+  setCurrentStep("setup")
+  setIsRecording(false)
+  setTimeRemaining(0)
+  setLiveFeedback([])
+  setCurrentTopic("")
+  setSessionData({
+    mediapipe_data: {
+      session_duration: 0,
+      good_posture_seconds: 0,
+      hand_gestures_seconds: 0,
+      speaking_seconds: 0
+    },
+    text_chunks: []
+  })
+  setFinalReport("")
 
-    // Stop media devices when resetting
-    stopMediaDevices()
-  }
+  // Stop media devices when resetting
+  stopMediaDevices()
+}
 
   if (currentStep === "setup") {
     return (
@@ -897,6 +1006,25 @@ useEffect(() => {
                                     };
                                 }
                             }
+                            window.addEventListener('message', (event) => {
+                              if (event.data.action === 'getSessionData') {
+                                const sessionDuration = (Date.now() - sessionStartTime) / 1000;
+                                const frameRate = 30; // Approximate frame rate
+                                
+                                const sessionData = {
+                                  sessionDuration: sessionDuration,
+                                  goodPostureSeconds: (mediaPipeData.goodPostureFrames / frameRate),
+                                  handGesturesSeconds: (mediaPipeData.handGesturesFrames / frameRate),
+                                  speakingSeconds: (mediaPipeData.speakingFrames / frameRate),
+                                  textChunks: textChunks
+                                };
+                                
+                                window.parent.postMessage({
+                                  type: 'sessionData',
+                                  data: sessionData
+                                }, '*');
+                              }
+                            });
 
                             const holistic = new Holistic({
                                 locateFile: (file) => \`https://cdn.jsdelivr.net/npm/@mediapipe/holistic/\${file}\`
@@ -1035,6 +1163,9 @@ useEffect(() => {
           <div className="container mx-auto px-4 py-4 flex items-center justify-between">
             <h1 className="text-xl font-semibold">Session Complete</h1>
             <div className="flex items-center space-x-2">
+              <Button variant="outline" onClick={downloadReport} disabled={!finalReport}>
+                Download Report
+              </Button>
               <Button variant="outline" onClick={resetSession}>
                 <RotateCcw className="w-4 h-4 mr-2" />
                 Practice Again
@@ -1189,6 +1320,20 @@ useEffect(() => {
                 </div>
               </CardContent>
             </Card>
+            {finalReport && (
+              <Card className="mt-8">
+                <CardHeader>
+                  <CardTitle>AI-Generated Comprehensive Analysis</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <pre className="whitespace-pre-wrap text-sm text-blue-900 font-mono">
+                      {finalReport}
+                    </pre>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </div>
         </div>
       </div>
