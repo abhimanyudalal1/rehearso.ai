@@ -84,129 +84,119 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Features Grid */}
+      {/* Features Showcase - Real-time Speech Analysis */}
+      <section className="bg-white py-20">
+        <div className="container mx-auto px-4 grid lg:grid-cols-2 gap-12 items-center">
+          {/* Left Image - Fixed sizing */}
+          <div className="w-full flex justify-center">
+            <div className="relative w-full max-w-lg">
+              <img
+                src="/real-time-analysis.jpg"
+                alt="Real-time Speech Analysis Dashboard"
+                className="w-full h-auto max-h-96 object-cover object-center rounded-xl shadow-lg"
+              />
+            </div>
+          </div>
 
+          {/* Right Text */}
+          <div>
+            <Badge className="mb-3 bg-blue-100 text-blue-700">Advanced Technology</Badge>
+            <h2 className="text-3xl font-bold mb-4">Real-time Speech Analysis</h2>
+            <p className="text-gray-600 text-lg mb-6">
+              Experience cutting-edge MediaPipe technology that analyzes your posture, gestures, and speech patterns in
+              real-time with instant AI feedback.
+            </p>
+            <ul className="space-y-3 text-gray-700">
+              <li className="flex items-start">
+                <CheckCircle className="w-5 h-5 text-blue-500 mt-1 mr-2 flex-shrink-0" />
+                <div>
+                  <strong>Live Posture Tracking:</strong> Computer vision detects your stance and provides instant
+                  posture feedback.
+                </div>
+              </li>
+              <li className="flex items-start">
+                <CheckCircle className="w-5 h-5 text-blue-500 mt-1 mr-2 flex-shrink-0" />
+                <div>
+                  <strong>Gesture Recognition:</strong> AI analyzes hand movements and suggests more expressive
+                  gestures.
+                </div>
+              </li>
+              <li className="flex items-start">
+                <CheckCircle className="w-5 h-5 text-blue-500 mt-1 mr-2 flex-shrink-0" />
+                <div>
+                  <strong>Voice Analytics:</strong> Real-time pitch, loudness, and tempo analysis with live graphs.
+                </div>
+              </li>
+            </ul>
+            <div className="mt-6">
+              <Link href="/practice/solo">
+                <Button className="bg-gradient-to-r from-blue-600 to-purple-600 text-white">Start Analysis Now</Button>
+              </Link>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Features Showcase - Smart Topic Generator */}
+      <section className="bg-gray-50 py-20">
+        <div className="container mx-auto px-4 grid lg:grid-cols-2 gap-12 items-center">
+          {/* Left Text */}
+          <div>
+            <Badge className="mb-3 bg-purple-100 text-purple-700">AI-Powered Content</Badge>
+            <h2 className="text-3xl font-bold mb-4">Smart Topic Generator</h2>
+            <p className="text-gray-600 text-lg mb-6">
+              Never run out of speaking topics! Our AI generates personalized, engaging topics based on your interests,
+              skill level, and current trends.
+            </p>
+            <ul className="space-y-3 text-gray-700">
+              <li className="flex items-start">
+                <CheckCircle className="w-5 h-5 text-purple-600 mt-1 mr-2 flex-shrink-0" />
+                <div>
+                  <strong>Personalized Topics:</strong> AI analyzes your profile to suggest relevant, engaging subjects.
+                </div>
+              </li>
+              <li className="flex items-start">
+                <CheckCircle className="w-5 h-5 text-purple-600 mt-1 mr-2 flex-shrink-0" />
+                <div>
+                  <strong>Trending Content:</strong> Stay current with topics from news, social media, and popular
+                  discussions.
+                </div>
+              </li>
+              <li className="flex items-start">
+                <CheckCircle className="w-5 h-5 text-purple-600 mt-1 mr-2 flex-shrink-0" />
+                <div>
+                  <strong>Skill-Based Difficulty:</strong> Topics automatically adjust complexity as you improve.
+                </div>
+              </li>
+            </ul>
+            <div className="mt-6">
+              <Link href="/practice/solo">
+                <Button className="bg-gradient-to-r from-purple-600 to-blue-600 text-white">Generate Topics</Button>
+              </Link>
+            </div>
+          </div>
+
+          {/* Right Image - Fixed sizing */}
+          <div className="w-full flex justify-center">
+            <div className="relative w-full max-w-lg">
+              <img
+                src="/ai-topic-generator.jpg"
+                alt="AI Topic Generation Interface"
+                className="w-full h-auto max-h-96 object-cover object-center rounded-xl shadow-lg"
+              />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Additional Features Grid */}
       <section className="container mx-auto px-4 py-20">
         <div className="text-center mb-16">
-          <h2 className="text-3xl md:text-4xl font-bold mb-4">Everything You Need to Excel</h2>
-          <p className="text-xl text-gray-600">Comprehensive tools for public speaking mastery</p>
+          <h2 className="text-3xl md:text-4xl font-bold mb-4">Complete Speaking Solution</h2>
+          <p className="text-xl text-gray-600">Everything you need to become a confident speaker</p>
         </div>
 
-      <section className="bg-white py-20">
-  <div className="container mx-auto px-4 grid lg:grid-cols-2 gap-12 items-center">
-    
-    {/* Left Image */}
-    <div className="w-full">
-      <img
-        src="/54C719FB-2200-4A9A-84C2-FFFD0F45428E.jpeg"
-        alt="Feature Demo"
-        className="rounded-xl shadow-lg w-full"
-      />
-    </div>
-
-    {/* Right Text */}
-    <div>
-      <Badge className="mb-3 bg-green-100 text-green-700">Practice Tools</Badge>
-      <h2 className="text-3xl font-bold mb-4">AI Virtual Audience</h2>
-      <p className="text-gray-600 text-lg mb-6">
-      Practice with our intelligent AI that analyzes your speech patterns, tone, and delivery in real-time
-      </p>
-      <ul className="space-y-3 text-gray-700">
-        <li className="flex items-start">
-          <CheckCircle className="w-5 h-5 text-green-500 mt-1 mr-2" />
-          Safe Practice: Judge-free environment with real-time feedback on delivery and engagement.
-        </li>
-        <li className="flex items-start">
-          <CheckCircle className="w-5 h-5 text-green-500 mt-1 mr-2" />
-          Always Available: 24/7 accessible training that adapts to any skill level or scenario.
-        </li>
-        <li className="flex items-start">
-          <CheckCircle className="w-5 h-5 text-green-500 mt-1 mr-2" />
-          Smart Analytics: AI tracks speech patterns and provides measurable improvement data.
-        </li>
-      </ul>
-      <div className="mt-6">
-        <Button className="bg-gradient-to-r from-blue-600 to-purple-600 text-white">
-          Book a Session
-        </Button>
-      </div>
-    </div>
-  </div>
-</section>
-      {/* <section className="container mx-auto px-4 py-20">
-        <div className="text-center mb-16">
-          <h2 className="text-3xl md:text-4xl font-bold mb-4">Everything You Need to Excel</h2>
-          <p className="text-xl text-gray-600">Comprehensive tools for public speaking mastery</p>
-        </div> */}
-
-
-<section className="bg-white py-20">
-  <div className="container mx-auto px-4 grid lg:grid-cols-2 gap-12 items-center">
-    
-    {/* Left Text */}
-    <div>
-      <Badge className="mb-3 bg-purple-100 text-purple-700">Smart Topic Generator</Badge>
-      <h2 className="text-3xl font-bold mb-4">Smart Topic Generator</h2>
-      <p className="text-gray-600 text-lg mb-6">
-      AI-curated speaking topics from daily life to professional debates with preparation time
-      </p>
-      <ul className="space-y-3 text-gray-700">
-        <li className="flex items-start">
-          <CheckCircle className="w-5 h-5 text-purple-600 mt-1 mr-2" />
-          Context-Aware Suggestions: AI analyzes audience, occasion, and speaker expertise to generate relevant, appropriate topics.
-        </li>
-        <li className="flex items-start">
-          <CheckCircle className="w-5 h-5 text-purple-600 mt-1 mr-2" />
-          Trending Integration: Pulls current events, popular discussions, and timely subjects for fresh, engaging content.
-        </li>
-        <li className="flex items-start">
-          <CheckCircle className="w-5 h-5 text-purple-600 mt-1 mr-2" />
-          Difficulty Scaling: Automatically adjusts topic complexity based on speaker experience and presentation goals.
-        </li>
-      </ul>
-      <div className="mt-6">
-        <Button className="bg-gradient-to-r from-purple-600 to-blue-600 text-white">
-          Practice Interviews
-        </Button>
-      </div>
-    </div>
-
-    {/* Right Image */}
-    <div className="w-full">
-      <img
-        src="/54C719FB-2200-4A9A-84C2-FFFD0F45428E.jpeg"
-        alt="Interview Practice Demo"
-        className="rounded-xl shadow-lg w-full"
-      />
-    </div>
-  </div>
-</section>
-
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-          <Card className="border-0 shadow-lg hover:shadow-xl transition-shadow">
-            <CardHeader>
-              <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mb-4">
-                <Brain className="w-6 h-6 text-blue-600" />
-              </div>
-              <CardTitle>AI Virtual Audience</CardTitle>
-              <CardDescription>
-                Practice with our intelligent AI that analyzes your speech patterns, tone, and delivery in real-time
-              </CardDescription>
-            </CardHeader>
-          </Card>
-
-          <Card className="border-0 shadow-lg hover:shadow-xl transition-shadow">
-            <CardHeader>
-              <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mb-4">
-                <Users className="w-6 h-6 text-purple-600" />
-              </div>
-              <CardTitle>Group Practice Rooms</CardTitle>
-              <CardDescription>
-                Create or join rooms with friends for peer feedback and collaborative improvement
-              </CardDescription>
-            </CardHeader>
-          </Card>
-
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
           <Card className="border-0 shadow-lg hover:shadow-xl transition-shadow">
             <CardHeader>
               <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center mb-4">
@@ -222,11 +212,11 @@ export default function LandingPage() {
           <Card className="border-0 shadow-lg hover:shadow-xl transition-shadow">
             <CardHeader>
               <div className="w-12 h-12 bg-orange-100 rounded-lg flex items-center justify-center mb-4">
-                <MessageSquare className="w-6 h-6 text-orange-600" />
+                <Users className="w-6 h-6 text-orange-600" />
               </div>
-              <CardTitle>Smart Topic Generator</CardTitle>
+              <CardTitle>Group Practice Rooms</CardTitle>
               <CardDescription>
-                AI-curated speaking topics from daily life to professional debates with preparation time
+                Create or join rooms with friends for peer feedback and collaborative improvement
               </CardDescription>
             </CardHeader>
           </Card>
