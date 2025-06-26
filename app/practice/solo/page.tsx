@@ -860,14 +860,18 @@ const resetSession = () => {
                                 max-width: 680px;
                             }
 
-                            canvas {
+                            .input_video {
                                 border: 1px solid #ddd;
                                 border-radius: 8px;
                                 margin-bottom: 15px;
-                                background-color: #000;
                                 width: 100%;
                                 max-width: 500px;
                                 height: auto;
+                                transform: scaleX(-1); /* Mirror the video like a selfie */
+                            }
+
+                            canvas {
+                                display: none; /* Hide canvas since we're showing video directly */
                             }
 
                             #feedback {
@@ -882,17 +886,13 @@ const resetSession = () => {
                                 box-sizing: border-box;
                                 line-height: 1.6;
                             }
-
-                            .input_video {
-                                display: none;
-                            }
                         </style>
                     </head>
                     <body>
                         <p id="status">Starting analysis...</p>
 
                         <div class="video-section">
-                            <video class="input_video" style="display: none;"></video>
+                            <video class="input_video" autoplay playsinline></video>
                             <canvas class="output_canvas" width="640px" height="480px"></canvas>
                             <div id="feedback">Real-time feedback will appear here...</div>
                         </div>
@@ -1055,10 +1055,8 @@ const resetSession = () => {
                             holistic.onResults(results => {
                                 mediaPipeData.totalFrames++;
                                 
-                                canvasCtx.save();
-                                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-                                canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-                                canvasCtx.restore();
+                                // Still process the image for MediaPipe analysis but don't draw to canvas
+                                // The video element will show the camera feed directly
 
                                 let feedback = [];
                                 let goodPosture = false;
