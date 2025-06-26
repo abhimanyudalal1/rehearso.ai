@@ -5,7 +5,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
-from report_db import insert_report,get_reports
+from report_db import insert_report,get_stats
 import os
 from key_manager import APIKeyManager
 from dotenv import load_dotenv
@@ -170,7 +170,7 @@ async def submit_session_data(request: Request):
 
 @app.get("/get-reports")
 async def get_my_reports():
-    return await get_reports()
+    return await get_stats()
 
 @app.websocket("/ws/audio")
 async def websocket_endpoint(websocket: WebSocket):
