@@ -53,6 +53,12 @@ export default function SoloPracticePage() {
   text_chunks: []
 })
 const [finalReport, setFinalReport] = useState("")
+const [sessionScores, setSessionScores] = useState<{
+  total_score:number;
+  posture_score: number;
+  gesture_score: number;
+  speaking_score: number;
+} | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const timerRef = useRef<NodeJS.Timeout>()
   const mediaStreamRef = useRef<MediaStream | null>(null)
@@ -312,6 +318,13 @@ const collectSessionDataAndGenerateReport = async () => {
         if (response.ok) {
           const result = await response.json()
           setFinalReport(result.report)
+          // Store the session scores
+          setSessionScores({
+            total_score:result.session_summary.total_score,
+            posture_score: result.session_summary.posture_score,
+            gesture_score: result.session_summary.gesture_score,
+            speaking_score: result.session_summary.speaking_score
+          })
         } else {
           console.error("Failed to generate report")
         }
@@ -437,7 +450,6 @@ const handleStopRecording = async () => {
     return `${mins}:${secs.toString().padStart(2, "0")}`
   }
 
-  // Replace the resetSession function around line 309
 const resetSession = () => {
   setCurrentStep("setup")
   setIsRecording(false)
@@ -454,6 +466,7 @@ const resetSession = () => {
     text_chunks: []
   })
   setFinalReport("")
+  setSessionScores(null) // Reset session scores
 
   // Stop media devices when resetting
   stopMediaDevices()
@@ -1199,7 +1212,7 @@ const resetSession = () => {
                 <CardContent className="p-6 text-center">
                   {analysisResult && (
                     <>
-                      <div className="text-3xl font-bold text-blue-600 mb-2">{analysisResult.overallScore}</div>
+                      <div className="text-3xl font-bold text-blue-600 mb-2">{sessionScores?.total_score}</div>
                       <div className="text-sm text-gray-600">Overall Score</div>
                     </>
                   )}
@@ -1208,26 +1221,32 @@ const resetSession = () => {
 
               <Card>
                 <CardContent className="p-6 text-center">
-                  <div className="text-3xl font-bold text-green-600 mb-2">{analysisResult?.voiceClarity || 92}</div>
-                  <div className="text-sm text-gray-600">Voice Clarity</div>
+                  <div className="text-3xl font-bold text-green-600 mb-2">
+                    {sessionScores?.posture_score || 'N/A'}
+                  </div>
+                  <div className="text-sm text-gray-600">Posture Score</div>
                 </CardContent>
               </Card>
 
               <Card>
                 <CardContent className="p-6 text-center">
-                  <div className="text-3xl font-bold text-purple-600 mb-2">{analysisResult?.bodyLanguage || 78}</div>
-                  <div className="text-sm text-gray-600">Body Language</div>
+                  <div className="text-3xl font-bold text-purple-600 mb-2">
+                    {sessionScores?.gesture_score || 'N/A'}
+                  </div>
+                  <div className="text-sm text-gray-600">Gesture Score</div>
                 </CardContent>
               </Card>
 
               <Card>
                 <CardContent className="p-6 text-center">
-                  <div className="text-3xl font-bold text-orange-600 mb-2">{analysisResult?.confidence || 88}</div>
-                  <div className="text-sm text-gray-600">Confidence</div>
+                  <div className="text-3xl font-bold text-orange-600 mb-2">
+                    {sessionScores?.speaking_score || 'N/A'}
+                  </div>
+                  <div className="text-sm text-gray-600">Speaking Score</div>
                 </CardContent>
               </Card>
             </div>
-
+            
             <div className="grid lg:grid-cols-2 gap-8">
               <Card>
                 <CardHeader>

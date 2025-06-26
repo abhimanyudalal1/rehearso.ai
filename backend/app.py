@@ -5,7 +5,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
-import time
+from report_db import insert_report,get_reports
 import os
 from key_manager import APIKeyManager
 from dotenv import load_dotenv
@@ -147,22 +147,30 @@ async def submit_session_data(request: Request):
         data = await request.json()
         session_data = SessionData(**data)
         
-        # Generate final report
         report = await generate_final_report(session_data)
-        
+        posture_score = round((session_data.mediapipe_data.good_posture_seconds / session_data.mediapipe_data.session_duration) * 100, 1)
+        gesture_score = round((session_data.mediapipe_data.hand_gestures_seconds / session_data.mediapipe_data.session_duration) * 100, 1)
+        speaking_score = round((session_data.mediapipe_data.speaking_seconds / session_data.mediapipe_data.session_duration) * 100, 1)
+        total_score = round((posture_score+gesture_score+speaking_score)/3, 1)
+        await insert_report(report,posture_score,gesture_score,speaking_score,total_score)
         return JSONResponse({
             "status": "success",
             "report": report,
             "session_summary": {
                 "duration": session_data.mediapipe_data.session_duration,
-                "posture_score": round((session_data.mediapipe_data.good_posture_seconds / session_data.mediapipe_data.session_duration) * 100, 1),
-                "gesture_score": round((session_data.mediapipe_data.hand_gestures_seconds / session_data.mediapipe_data.session_duration) * 100, 1),
-                "speaking_score": round((session_data.mediapipe_data.speaking_seconds / session_data.mediapipe_data.session_duration) * 100, 1),
+                "posture_score": posture_score,
+                "gesture_score": gesture_score,
+                "speaking_score": speaking_score,
+                "total_score":total_score,
                 "total_speech_chunks": len(session_data.text_chunks)
             }
         })
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+@app.get("/get-reports")
+async def get_my_reports():
+    return await get_reports()
 
 @app.websocket("/ws/audio")
 async def websocket_endpoint(websocket: WebSocket):
