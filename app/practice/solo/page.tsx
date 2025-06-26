@@ -46,7 +46,7 @@ export default function SoloPracticePage() {
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const timerRef = useRef<NodeJS.Timeout>()
-
+  const mediaStreamRef = useRef<MediaStream | null>(null)
   const topics = [
     "The impact of social media on modern communication",
     "Why learning a new language benefits your career",
@@ -112,6 +112,69 @@ export default function SoloPracticePage() {
     }
   }, [currentStep])
 
+  // Add these useEffect hooks after line 74 (after the existing useEffects)
+
+// 1. Cleanup when component unmounts
+useEffect(() => {
+  return () => {
+    // Cleanup media devices when component unmounts
+    stopMediaDevices()
+    // Also cleanup speech recognition
+    if (speechRecognition) {
+      speechRecognition.stopRecording()
+    }
+  }
+}, [])
+
+// 2. Cleanup when user navigates away or leaves the page
+useEffect(() => {
+  const handleBeforeUnload = () => {
+    stopMediaDevices()
+    if (speechRecognition) {
+      speechRecognition.stopRecording()
+    }
+  }
+
+  const handleVisibilityChange = () => {
+    if (document.hidden && isRecording) {
+      // Stop recording if user switches tabs or minimizes window
+      handleStopRecording()
+    }
+  }
+
+  const handlePopState = () => {
+    // Handle browser back/forward buttons
+    stopMediaDevices()
+  }
+
+  window.addEventListener('beforeunload', handleBeforeUnload)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  window.addEventListener('popstate', handlePopState)
+
+  return () => {
+    window.removeEventListener('beforeunload', handleBeforeUnload)
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
+    window.removeEventListener('popstate', handlePopState)
+  }
+}, [isRecording])
+
+// 3. Cleanup when switching between steps
+useEffect(() => {
+  if (currentStep !== "speaking" && mediaStreamRef.current) {
+    // Stop media devices when leaving speaking step
+    stopMediaDevices()
+  }
+}, [currentStep])
+
+// 4. Cleanup timer when component unmounts or dependencies change
+useEffect(() => {
+  return () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+    }
+  }
+}, [])
+
   // Update the generateRandomTopic function to use AI
   const generateRandomTopic = async () => {
     try {
@@ -173,6 +236,7 @@ export default function SoloPracticePage() {
         audio: true,
         video: true,
       })
+      mediaStreamRef.current = stream
 
       // Initialize speech recognition
       await speechRecognition.initialize()
@@ -196,12 +260,20 @@ export default function SoloPracticePage() {
       )
     }
   }
-
+  // Add function to stop media devices
+  const stopMediaDevices = () => {
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => {
+        track.stop()
+      })
+      mediaStreamRef.current = null
+    }
+  }
   // Update the handleStopRecording function to analyze speech
   const handleStopRecording = async () => {
     setIsRecording(false)
     setIsAnalyzing(true)
-
+    stopMediaDevices()
     try {
       // Get speech metrics
       const metrics = speechRecognition.stopRecording()
@@ -273,6 +345,9 @@ export default function SoloPracticePage() {
     setTimeRemaining(0)
     setLiveFeedback([])
     setCurrentTopic("")
+
+    // Stop media devices when resetting
+    stopMediaDevices()
   }
 
   if (currentStep === "setup") {
@@ -932,7 +1007,7 @@ export default function SoloPracticePage() {
               </div>
               <div className="h-full relative">
                 <iframe
-                  src="http://192.168.1.9:8501"
+                  src="http://localhost:8501/"
                   className="w-full h-full border-0"
                   title="Streamlit Audio Analysis"
                   onError={() => {
