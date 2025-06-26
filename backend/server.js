@@ -26,13 +26,13 @@ const authRoutes = require('./routes/auth'); // Assuming auth.js has /login, /re
 const sessionsRoutes = require('./routes/sessions'); // New: Import sessions route
 const userDataRoutes = require('./routes/userData'); // Existing
 const userDashboardRoutes = require('./routes/userDashboard'); // Existing
-
+const progressRouter = require('./routes/progress');
 // Mount Routes with specific base paths
 app.use('/api/auth', authRoutes); // CORRECTED: Mount auth routes under /api/auth
 app.use('/api', sessionsRoutes); // Mount sessions routes under /api/sessions (as defined in sessions.js)
 app.use('/api', userDataRoutes); // Mount userData routes under /api/userdata (as defined in userData.js)
 app.use('/api', userDashboardRoutes); // Mount userDashboard routes under /api/userstats and /api/usersessions
-
+app.use('/api/progress', progressRouter);
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({
