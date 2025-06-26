@@ -8,7 +8,6 @@ import { Progress } from "@/components/ui/progress"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Mic, Users, Brain, BarChart3, Plus, Clock, Trophy, TrendingUp, Settings, LogOut } from "lucide-react"
 import Link from "next/link"
-// import { db } from "@/lib/database" // This is commented out, which is fine for frontend
 
 const achievements = [
   { title: "First Session", description: "Complete your first speaking session", earned: false },
@@ -25,29 +24,33 @@ interface SessionItem {
   date: string;
 }
 
-// Define the structure of raw session data from the backend
-interface RawSessionData {
+// Define the structure of stats data from the backend
+interface StatsData {
   _id: string;
-  type: "solo" | "group";
-  title?: string; // Assuming 'title' is used for the topic in your backend session schema
-  feedback?: {
-    overallScore?: number;
-  };
-  createdAt: string;
-  // Add other properties if your backend session object has them
+  report: string;
+  posture_score: number;
+  gesture_score: number;
+  speaking_score: number;
+  total_score: number;
+  timestamp: number;
 }
 
-
-// Define the backend URL using environment variable
-const BACKEND_URL = process.env.NEXT_PUBLIC_NODE_BACKEND_URL || 'http://localhost:4000';
-
+interface ReportsResponse {
+  stats: StatsData[];
+  total_sessions: number;
+  average_total_score: number;
+  average_posture_score: number;
+  average_gesture_score: number;
+  average_speaking_score: number;
+  maximum_total_score: number;
+}
 
 export default function Dashboard() {
   const [user, setUser] = useState({
-    name: "Alex Johnson",
+    name: "",
     email: "alex@example.com",
     avatar: "/placeholder.svg?height=40&width=40",
-    level: "Intermediate",
+    level: "Beginner",
     totalSessions: 0,
     weeklyGoal: 5,
     completedThisWeek: 0,
@@ -61,90 +64,54 @@ export default function Dashboard() {
 
   useEffect(() => {
     const loadUserData = async () => {
-      setIsLoading(true); // Ensure loading state is true at the start of the fetch
+      setIsLoading(true);
       try {
-        // TODO: Replace with actual ID from authenticated user (e.g., from a token/cookie)
-        // Use a valid MongoDB ObjectId if testing directly and you have a user in DB
-        const userId = "60c72b2f9f1b2c001c8e4d1a"; // Example: replace with actual user ID from your DB
+        // Fetch data from the get-reports endpoint
+        const response = await fetch('http://localhost:8000/get-reports');
+        
+        if (response.ok) {
+          const data: ReportsResponse = await response.json();
+          
+          // Update user stats with fetched data
+          const thisWeekSessions = Math.min(data.total_sessions, 4); // Max 4 for weekly progress
+          
+          setUser((prev) => ({
+            ...prev,
+            totalSessions: data.total_sessions,
+            completedThisWeek: thisWeekSessions,
+            averageScore: Math.round(data.average_total_score),
+            bestScore: Math.round(data.maximum_total_score),
+          }));
 
-
-        // --- 1. Fetch stats ---
-        let statsData = { totalSessions: 0, thisWeekSessions: 0, averageScore: 0, bestScore: 0 };
-        try {
-          const statsRes = await fetch(`${BACKEND_URL}/api/userstats/${userId}`);
-          if (statsRes.ok) {
-            const data = await statsRes.json();
-            statsData = {
-              totalSessions: data.totalSessions || 0,
-              thisWeekSessions: data.thisWeekSessions || 0,
-              averageScore: data.averageScore || 0,
-              bestScore: data.bestScore || 0,
-            };
-          } else {
-            console.error(`Failed to fetch stats: ${statsRes.status} ${statsRes.statusText}`);
-            // Optionally log response body for more details
-            const errorText = await statsRes.text();
-            console.error("Stats Error Details:", errorText);
-          }
-        } catch (error) {
-          console.error("Error fetching user stats:", error);
-        }
-
-        // --- 2. Fetch sessions ---
-        let fetchedSessions: RawSessionData[] = []; // Declare type for clarity
-        try {
-          const sessionsRes = await fetch(`${BACKEND_URL}/api/usersessions/${userId}?limit=3`);
-          if (sessionsRes.ok) {
-            const rawSessions = await sessionsRes.json();
-            // This is the CRUCIAL CHECK: Ensure rawSessions is an array before processing
-            if (Array.isArray(rawSessions)) {
-              fetchedSessions = rawSessions;
-            } else {
-              console.warn("Sessions API did not return an array. Received:", rawSessions);
-              fetchedSessions = []; // Fallback to empty array if not an array
-            }
-          } else {
-            console.error(`Failed to fetch sessions: ${sessionsRes.status} ${sessionsRes.statusText}`);
-            // Optionally log response body for more details
-            const errorText = await sessionsRes.text();
-            console.error("Sessions Error Details:", errorText);
-          }
-        } catch (error) {
-          console.error("Error fetching user sessions:", error);
-        }
-
-        // --- Update state with fetched data ---
-        setUser((prev) => ({
-          ...prev,
-          totalSessions: statsData.totalSessions,
-          completedThisWeek: statsData.thisWeekSessions,
-          averageScore: statsData.averageScore,
-          bestScore: statsData.bestScore,
-        }));
-
-        // Now, `fetchedSessions` is guaranteed to be an array, even if empty or if fetch failed.
-        setRecentSessions(
-          fetchedSessions.map((session) => ({
+          // Get the latest 4 sessions (or less if there are fewer sessions)
+          const latestSessions = data.stats.slice(0, 4);
+          
+          // Transform the sessions data to match the SessionItem interface
+          const transformedSessions: SessionItem[] = latestSessions.map((session, index) => ({
             id: session._id,
-            type: session.type === "solo" ? "Solo Practice" : (session.type === "group" ? "Group Session" : "Other"),
-            topic: session.title || "Untitled", // Changed from session.topic to session.title based on schema
-            score: session.feedback?.overallScore || 0,
-            date: new Date(session.createdAt).toLocaleDateString(),
-          }))
-        );
+            type: "Solo Practice", // Default type since the endpoint doesn't specify type
+            topic: `Session ${index + 1}`, // Generic topic since the endpoint doesn't provide specific topics
+            score: Math.round(session.total_score),
+            date: new Date(session.timestamp * 1000).toLocaleDateString(),
+          }));
 
+          setRecentSessions(transformedSessions);
+          
+        } else {
+          console.error(`Failed to fetch reports: ${response.status} ${response.statusText}`);
+          const errorText = await response.text();
+          console.error("Reports Error Details:", errorText);
+        }
+        
       } catch (error) {
-        // This catch block will primarily catch errors from the `fetch` calls themselves,
-        // not usually type errors from `map` if the above checks are in place.
-        console.error("Caught an unexpected error during user data loading:", error);
+        console.error("Error fetching reports data:", error);
       } finally {
-        setIsLoading(false); // Ensure loading state is set to false even if errors occur
+        setIsLoading(false);
       }
     };
 
     loadUserData();
   }, []); // Empty dependency array means this runs once on component mount
-
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -185,7 +152,7 @@ export default function Dashboard() {
       <div className="container mx-auto px-4 py-8">
         {/* Welcome Section */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold mb-2">Welcome back, {user.name}!</h1>
+          <h1 className="text-3xl font-bold mb-2">Welcome back! {user.name}</h1>
           <p className="text-gray-600">Ready to improve your speaking skills today?</p>
         </div>
 
@@ -268,7 +235,10 @@ export default function Dashboard() {
                       </div>
                       <Progress value={(user.completedThisWeek / user.weeklyGoal) * 100} className="h-2" />
                       <p className="text-sm text-gray-600">
-                        {user.weeklyGoal - user.completedThisWeek} more sessions to reach your weekly goal
+                        {user.weeklyGoal - user.completedThisWeek > 0
+                          ? `${user.weeklyGoal - user.completedThisWeek} more sessions to reach your weekly goal`
+                          : "Congratulations! You've reached your weekly goal!"
+                        }
                       </p>
                     </div>
                   </CardContent>
@@ -284,12 +254,12 @@ export default function Dashboard() {
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-4">
-                      {recentSessions.length > 0 ? ( // Added check for empty array
+                      {recentSessions.length > 0 ? (
                         recentSessions.map((session) => (
                           <div key={session.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
                             <div className="flex-1">
                               <div className="flex items-center space-x-2 mb-1">
-                                <Badge variant={session.type === "Solo Practice" ? "default" : "secondary"}>
+                                <Badge variant="default">
                                   {session.type}
                                 </Badge>
                                 <span className="text-sm text-gray-500">{session.date}</span>

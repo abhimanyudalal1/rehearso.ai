@@ -1210,7 +1210,7 @@ const resetSession = () => {
                 <CardContent className="p-6 text-center">
                   {analysisResult && (
                     <>
-                      <div className="text-3xl font-bold text-blue-600 mb-2">{sessionScores?.total_score}</div>
+                      <div className="text-3xl font-bold text-blue-600 mb-2">{sessionScores?.total_score||"🕒"}</div>
                       <div className="text-sm text-gray-600">Overall Score</div>
                     </>
                   )}
@@ -1220,7 +1220,7 @@ const resetSession = () => {
               <Card>
                 <CardContent className="p-6 text-center">
                   <div className="text-3xl font-bold text-green-600 mb-2">
-                    {sessionScores?.posture_score || 'N/A'}
+                    {sessionScores?.posture_score || '🕒'}
                   </div>
                   <div className="text-sm text-gray-600">Posture Score</div>
                 </CardContent>
@@ -1229,7 +1229,7 @@ const resetSession = () => {
               <Card>
                 <CardContent className="p-6 text-center">
                   <div className="text-3xl font-bold text-purple-600 mb-2">
-                    {sessionScores?.gesture_score || 'N/A'}
+                    {sessionScores?.gesture_score || '🕒'}
                   </div>
                   <div className="text-sm text-gray-600">Gesture Score</div>
                 </CardContent>
@@ -1238,7 +1238,7 @@ const resetSession = () => {
               <Card>
                 <CardContent className="p-6 text-center">
                   <div className="text-3xl font-bold text-orange-600 mb-2">
-                    {sessionScores?.speaking_score || 'N/A'}
+                    {sessionScores?.speaking_score || '🕒'}
                   </div>
                   <div className="text-sm text-gray-600">Speaking Score</div>
                 </CardContent>
