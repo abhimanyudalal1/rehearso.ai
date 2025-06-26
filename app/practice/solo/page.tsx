@@ -42,6 +42,7 @@ export default function SoloPracticePage() {
   // Update the state to include real analysis
   const [speechMetrics, setSpeechMetrics] = useState<SpeechMetrics | null>(null)
   const [analysisResult, setAnalysisResult] = useState<SpeechAnalysis | null>(null)
+  const [isEndingSession, setIsEndingSession] = useState(false)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [sessionData, setSessionData] = useState({
   mediapipe_data: {
@@ -375,69 +376,77 @@ Generated on: ${new Date().toLocaleString()}
   document.body.removeChild(link)
   URL.revokeObjectURL(url)
 }
-  // Update the handleStopRecording function to analyze speech
-  // Replace the handleStopRecording function around line 240
-const handleStopRecording = async () => {
+  const handleStopRecording = async () => {
+  setIsEndingSession(true) // Show spinner immediately
   setIsRecording(false)
-  setIsAnalyzing(true)
   stopMediaDevices()
   
-  try {
-    // Get speech metrics
-    const metrics = speechRecognition.stopRecording()
-    setSpeechMetrics(metrics)
-
-    // Analyze speech with AI
-    const analysis = await aiAnalysis.analyzeSpeech(metrics.transcript, metrics.duration, {
-      fillerWordCount: metrics.fillerWordCount,
-      averageVolume: metrics.averageVolume,
-      eyeContactPercentage: metrics.eyeContactPercentage,
-      gestureCount: metrics.gestureCount,
-    })
-    setAnalysisResult(analysis)
-
-    // Collect session data and generate report
-    await collectSessionDataAndGenerateReport()
-
-    // Save session to MongoDB backend
+  // Show spinner for at least 3 seconds
+  setTimeout(() => {
+    setIsEndingSession(false)
+  }, 6000)
+  
+  // Add a small delay before starting the analysis
+  setTimeout(async () => {
+    setIsAnalyzing(true)
+    
     try {
-      await db.createSession({
-        title: `Solo Practice: ${currentTopic.substring(0, 50)}...`,
-        content: currentTopic,
-        duration: metrics.duration,
-        feedback: {
-          overallScore: analysis.overallScore,
-          clarity: analysis.voiceClarity,
-          pace: analysis.pacingScore,
-          confidence: analysis.confidence,
-          suggestions: [...analysis.strengths, ...analysis.improvements],
-        },
+      // Get speech metrics
+      const metrics = speechRecognition.stopRecording()
+      setSpeechMetrics(metrics)
+
+      // Analyze speech with AI
+      const analysis = await aiAnalysis.analyzeSpeech(metrics.transcript, metrics.duration, {
+        fillerWordCount: metrics.fillerWordCount,
+        averageVolume: metrics.averageVolume,
+        eyeContactPercentage: metrics.eyeContactPercentage,
+        gestureCount: metrics.gestureCount,
       })
-    } catch (dbError) {
-      console.error("Error saving session:", dbError)
+      setAnalysisResult(analysis)
+
+      // Collect session data and generate report
+      await collectSessionDataAndGenerateReport()
+
+      // Save session to MongoDB backend
+      try {
+        await db.createSession({
+          title: `Solo Practice: ${currentTopic.substring(0, 50)}...`,
+          content: currentTopic,
+          duration: metrics.duration,
+          feedback: {
+            overallScore: analysis.overallScore,
+            clarity: analysis.voiceClarity,
+            pace: analysis.pacingScore,
+            confidence: analysis.confidence,
+            suggestions: [...analysis.strengths, ...analysis.improvements],
+          },
+        })
+      } catch (dbError) {
+        console.error("Error saving session:", dbError)
+      }
+    } catch (error) {
+      console.error("Error analyzing speech:", error)
+      // Fallback analysis
+      setAnalysisResult({
+        overallScore: 75,
+        voiceClarity: 80,
+        confidence: 70,
+        bodyLanguage: 75,
+        eyeContact: 75,
+        grammarScore: 85,
+        vocabularyScore: 80,
+        pacingScore: 75,
+        volumeScore: 70,
+        strengths: ["Clear articulation", "Good content structure", "Appropriate speaking pace"],
+        improvements: ["Reduce filler words", "Maintain more eye contact", "Use more varied vocabulary"],
+        recommendation:
+          "Focus on practicing without filler words and maintaining consistent eye contact with your audience.",
+      })
+    } finally {
+      setIsAnalyzing(false)
+      setCurrentStep("feedback")
     }
-  } catch (error) {
-    console.error("Error analyzing speech:", error)
-    // Fallback analysis
-    setAnalysisResult({
-      overallScore: 75,
-      voiceClarity: 80,
-      confidence: 70,
-      bodyLanguage: 75,
-      eyeContact: 75,
-      grammarScore: 85,
-      vocabularyScore: 80,
-      pacingScore: 75,
-      volumeScore: 70,
-      strengths: ["Clear articulation", "Good content structure", "Appropriate speaking pace"],
-      improvements: ["Reduce filler words", "Maintain more eye contact", "Use more varied vocabulary"],
-      recommendation:
-        "Focus on practicing without filler words and maintaining consistent eye contact with your audience.",
-    })
-  } finally {
-    setIsAnalyzing(false)
-    setCurrentStep("feedback")
-  }
+  }, 500) // Small delay before analysis starts
 
   if (timerRef.current) {
     clearTimeout(timerRef.current)
@@ -763,36 +772,51 @@ const resetSession = () => {
     )
   }
 
-  if (currentStep === "speaking") {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <div className="container mx-auto px-4 py-4">
-          {/* Top Bar */}
-          <div className="flex items-center justify-between mb-4 bg-white p-4 rounded-lg shadow-sm">
-            <div className="flex items-center space-x-4">
-              <Badge className="bg-red-600 text-white">
-                <div className="w-2 h-2 bg-white rounded-full mr-2 animate-pulse"></div>
-                LIVE
-              </Badge>
-              <div className="text-2xl font-bold text-gray-900">{formatTime(timeRemaining)}</div>
-            </div>
-
-            <div className="flex items-center space-x-2">
-              <Button variant={isMicOn ? "default" : "destructive"} size="sm" onClick={() => setIsMicOn(!isMicOn)}>
-                {isMicOn ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-              </Button>
-              <Button
-                variant={isCameraOn ? "default" : "destructive"}
-                size="sm"
-                onClick={() => setIsCameraOn(!isCameraOn)}
-              >
-                {isCameraOn ? <Video className="w-4 h-4" /> : <VideoOff className="w-4 h-4" />}
-              </Button>
-              <Button variant="destructive" onClick={handleStopRecording}>
-                Stop Session
-              </Button>
-            </div>
+if (currentStep === "speaking") {
+  return (
+    <div className="min-h-screen bg-gray-50 relative">
+      {/* End Session Spinner Overlay - Analytics Style */}
+      {isEndingSession && (
+        <div className="min-h-screen bg-gray-50 flex items-center justify-center fixed inset-0 z-50">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+            <p className="text-gray-600">Ending session and preparing your analysis...</p>
           </div>
+        </div>
+      )}
+
+      <div className="container mx-auto px-4 py-4">
+        {/* Top Bar */}
+        <div className="flex items-center justify-between mb-4 bg-white p-4 rounded-lg shadow-sm">
+          <div className="flex items-center space-x-4">
+            <Badge className="bg-red-600 text-white">
+              <div className="w-2 h-2 bg-white rounded-full mr-2 animate-pulse"></div>
+              LIVE
+            </Badge>
+            <div className="text-2xl font-bold text-gray-900">{formatTime(timeRemaining)}</div>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <Button variant={isMicOn ? "default" : "destructive"} size="sm" onClick={() => setIsMicOn(!isMicOn)}>
+              {isMicOn ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+            </Button>
+            <Button
+              variant={isCameraOn ? "default" : "destructive"}
+              size="sm"
+              onClick={() => setIsCameraOn(!isCameraOn)}
+            >
+              {isCameraOn ? <Video className="w-4 h-4" /> : <VideoOff className="w-4 h-4" />}
+            </Button>
+            <Button 
+              variant="destructive" 
+              onClick={handleStopRecording}
+              disabled={isEndingSession}
+            >
+              {isEndingSession ? "Ending..." : "Stop Session"}
+            </Button>
+          </div>
+        </div>
+
 
           {/* Topic Reminder */}
           <div className="mb-4">
