@@ -8,6 +8,9 @@ from pydantic import BaseModel
 from report_db import insert_report,get_stats
 import os
 from key_manager import APIKeyManager
+import json
+import uuid
+from typing import Dict, List,Optional
 from dotenv import load_dotenv
 load_dotenv()
 API_KEY = os.getenv("GOOGLE_API")
@@ -68,6 +71,20 @@ class TextChunk(BaseModel):
 class SessionData(BaseModel):
     mediapipe_data: MediaPipeData
     text_chunks: list[TextChunk]
+
+
+class RoomData(BaseModel):
+    name: str
+    topic_category: str
+    time_per_speaker: int
+    max_participants: int
+    is_public: bool
+    description: Optional[str] = ""
+    host_name: str
+
+class UserJoinData(BaseModel):
+    user_id: str
+    user_name: str
 
 class ConnectionManager:
     def __init__(self):
@@ -196,3 +213,197 @@ async def websocket_endpoint(websocket: WebSocket):
                 break
     finally:
         await manager.disconnect(websocket)
+
+active_rooms: Dict[str, dict] = {}
+room_connections: Dict[str, List[WebSocket]] = {}
+
+async def broadcast_to_room(room_id: str, message: dict, exclude=None):
+    """Broadcast message to all participants in a room"""
+    if room_id in room_connections:
+        for ws in room_connections[room_id]:
+            if ws != exclude:
+                try:
+                    await ws.send_text(json.dumps(message))
+                except:
+                    # Remove dead connections
+                    room_connections[room_id].remove(ws)
+
+@app.post("/api/rooms")
+async def create_room(room_data: RoomData):
+    """Create a new room"""
+    room_id = str(uuid.uuid4())[:8].upper()
+    
+    # Store room in active_rooms
+    active_rooms[room_id] = {
+        "id": room_id,
+        "name": room_data.name,
+        "host_name": room_data.host_name,
+        "host_id": f"host_{room_id}",  # Generate host ID
+        "topic_category": room_data.topic_category,
+        "time_per_speaker": room_data.time_per_speaker,
+        "max_participants": room_data.max_participants,
+        "is_public": room_data.is_public,
+        "description": room_data.description,
+        "status": "waiting",  # waiting, active, completed
+        "participants": [],
+        "speaking_order": [],
+        "current_speaker": None,
+        "feedbacks": [],
+        "created_at": "2025-01-01T00:00:00Z"  # Use actual timestamp
+    }
+    
+    return {"room_id": room_id}
+
+@app.get("/api/rooms")
+async def get_rooms():
+    """Get all available rooms"""
+    # Filter and return public rooms
+    public_rooms = []
+    for room_id, room in active_rooms.items():
+        if room["is_public"] and room["status"] != "completed":
+            public_rooms.append(room)
+    
+    return {"rooms": public_rooms}
+
+@app.post("/api/rooms/{room_id}/join")
+async def join_room(room_id: str, user_data: UserJoinData):
+    """Join a specific room"""
+    if room_id not in active_rooms:
+        return JSONResponse({"error": "Room not found"}, status_code=404)
+    
+    room = active_rooms[room_id]
+    
+    # Check if room is full
+    if len(room["participants"]) >= room["max_participants"]:
+        return JSONResponse({"error": "Room is full"}, status_code=400)
+    
+    # Add participant
+    participant = {
+        "user_id": user_data.user_id,
+        "user_name": user_data.user_name,
+        "joined_at": "2025-01-01T00:00:00Z"
+    }
+    
+    room["participants"].append(participant)
+    
+    return {"status": "joined", "room": room}
+
+# Enhanced WebSocket for room communication and WebRTC signaling
+@app.websocket("/ws/room/{room_id}")
+async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
+    await websocket.accept()
+    
+    # Initialize room connections
+    if room_id not in room_connections:
+        room_connections[room_id] = []
+    room_connections[room_id].append(websocket)
+    
+    # Generate user ID for this connection
+    user_id = str(uuid.uuid4())
+    
+    try:
+        # Send initial room state
+        if room_id in active_rooms:
+            await websocket.send_text(json.dumps({
+                "type": "room_state",
+                "room": active_rooms[room_id],
+                "user_id": user_id
+            }))
+        
+        while True:
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            
+            # Handle different message types
+            if message["type"] == "webrtc_offer":
+                # Forward WebRTC signaling
+                await broadcast_to_room(room_id, message, exclude=websocket)
+                
+            elif message["type"] == "webrtc_answer":
+                # Forward WebRTC signaling
+                await broadcast_to_room(room_id, message, exclude=websocket)
+                
+            elif message["type"] == "webrtc_ice_candidate":
+                # Forward WebRTC signaling
+                await broadcast_to_room(room_id, message, exclude=websocket)
+                
+            elif message["type"] == "start_session":
+                # Host starts the session
+                if room_id in active_rooms:
+                    room = active_rooms[room_id]
+                    room["status"] = "active"
+                    
+                    # Randomize speaking order
+                    participants = room["participants"]
+                    import random
+                    random.shuffle(participants)
+                    room["speaking_order"] = [p["user_id"] for p in participants]
+                    room["current_speaker"] = room["speaking_order"][0] if participants else None
+                    
+                await broadcast_to_room(room_id, {
+                    "type": "session_started",
+                    "room": active_rooms[room_id]
+                })
+                
+            elif message["type"] == "send_feedback":
+                # Store and broadcast feedback
+                if room_id in active_rooms:
+                    if "feedbacks" not in active_rooms[room_id]:
+                        active_rooms[room_id]["feedbacks"] = []
+                    active_rooms[room_id]["feedbacks"].append(message["feedback"])
+                
+                await broadcast_to_room(room_id, message, exclude=websocket)
+                
+            elif message["type"] == "next_speaker":
+                # Move to next speaker
+                if room_id in active_rooms:
+                    room = active_rooms[room_id]
+                    if room["current_speaker"] in room["speaking_order"]:
+                        current_index = room["speaking_order"].index(room["current_speaker"])
+                        if current_index < len(room["speaking_order"]) - 1:
+                            room["current_speaker"] = room["speaking_order"][current_index + 1]
+                        else:
+                            room["status"] = "completed"
+                            room["current_speaker"] = None
+                
+                await broadcast_to_room(room_id, {
+                    "type": "speaker_changed",
+                    "room": active_rooms[room_id]
+                })
+                
+            else:
+                # Broadcast other messages
+                await broadcast_to_room(room_id, message, exclude=websocket)
+            
+    except WebSocketDisconnect:
+        # Clean up on disconnect
+        if websocket in room_connections.get(room_id, []):
+            room_connections[room_id].remove(websocket)
+        
+        # Notify others about disconnection
+        await broadcast_to_room(room_id, {
+            "type": "participant_disconnected",
+            "user_id": user_id,
+            "timestamp": "2025-01-01T00:00:00Z"
+        })
+        
+# ADD: Get specific room endpoint
+@app.get("/api/rooms/{room_id}")
+async def get_room(room_id: str):
+    """Get details of a specific room"""
+    if room_id in active_rooms:
+        return {"room": active_rooms[room_id]}
+    return JSONResponse({"error": "Room not found"}, status_code=404)
+
+# ADD: Session data submission for groups
+@app.post("/api/rooms/{room_id}/submit-session")
+async def submit_group_session(room_id: str, session_data: dict):
+    """Store group session data and generate reports"""
+    if room_id in active_rooms:
+        active_rooms[room_id]["session_data"] = session_data
+        
+        # Generate comprehensive reports here
+        # You can integrate with your existing report generation logic
+        
+        return {"status": "success", "message": "Session data stored"}
+    return JSONResponse({"error": "Room not found"}, status_code=404)

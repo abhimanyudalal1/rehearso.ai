@@ -28,7 +28,8 @@ export default function GroupPracticePage() {
   const [roomCode, setRoomCode] = useState("")
   const [availableRooms, setAvailableRooms] = useState<RoomData[]>([])
   const [isLoading, setIsLoading] = useState(true)
-
+  const [error, setError] = useState<string | null>(null)
+  const [connectionStatus, setConnectionStatus] = useState<"connected" | "disconnected" | "connecting">("disconnected")
   const [formData, setFormData] = useState({
     roomName: "",
     maxParticipants: 6,
@@ -43,41 +44,49 @@ export default function GroupPracticePage() {
     const loadRooms = async () => {
       try {
         setIsLoading(true)
+        setError(null) // Clear previous errors
+        setConnectionStatus("connecting")
 
-        // Load rooms from localStorage
-        const roomsRaw = localStorage.getItem("practiceRooms")
-        let rooms = []
-
-        if (roomsRaw) {
-          try {
-            const parsed = JSON.parse(roomsRaw)
-            if (Array.isArray(parsed)) {
-              rooms = parsed.filter((room) => room && typeof room === "object" && room.id)
-            }
-          } catch (error) {
-            console.error("Error parsing rooms:", error)
-            localStorage.setItem("practiceRooms", JSON.stringify([]))
-          }
+        // REPLACE: Load from FastAPI backend instead of localStorage
+        const response = await fetch("http://localhost:8000/api/rooms")
+        if (!response.ok) {
+          throw new Error(`Server responded with ${response.status}: ${response.statusText}`)
         }
+        const data = await response.json()
+        setConnectionStatus("connected")
 
-        // Transform rooms for display
-        const transformedRooms = rooms
-          .filter((room) => room.is_public && room.status !== "completed")
-          .map((room) => ({
-            id: room.id,
-            name: room.name,
-            host: "Host", // Simplified for demo
-            participants: room.participants?.length || 0,
-            maxParticipants: room.max_participants,
-            topic: room.topic_category,
-            isPublic: room.is_public,
-            timePerSpeaker: room.time_per_speaker,
-            status: room.status === "active" ? "active" : "waiting",
-          }))
-
-        setAvailableRooms(transformedRooms)
+        if (data.rooms) {
+          const transformedRooms = data.rooms
+            .filter((room: any) => room.is_public && room.status !== "completed")
+            .map((room: any) => ({
+              id: room.id,
+              name: room.name,
+              host: room.host_name,
+              participants: room.participants?.length || 0,
+              maxParticipants: room.max_participants,
+              topic: room.topic_category,
+              isPublic: room.is_public,
+              timePerSpeaker: room.time_per_speaker,
+              status: room.status === "active" ? "active" : "waiting",
+            }))
+          
+          setAvailableRooms(transformedRooms)
+        }
       } catch (error) {
         console.error("Error loading rooms:", error)
+        setConnectionStatus("disconnected")
+        
+        // Set user-friendly error messages
+        if (error instanceof Error) {
+          if (error.message.includes("fetch")) {
+            setError("Cannot connect to server. Please make sure the backend is running on http://localhost:8000")
+          } else {
+            setError(`Failed to load rooms: ${error.message}`)
+          }
+        } else {
+          setError("An unexpected error occurred while loading rooms")
+        }
+        
         setAvailableRooms([])
       } finally {
         setIsLoading(false)
@@ -85,6 +94,9 @@ export default function GroupPracticePage() {
     }
 
     loadRooms()
+  //   const interval = setInterval(loadRooms, 30000) // Refresh every 30 seconds
+  //   return () => clearInterval(interval)
+  // }, [])
   }, [])
 
   const filteredRooms = availableRooms.filter(
@@ -122,35 +134,31 @@ export default function GroupPracticePage() {
 
     setIsCreating(true)
     try {
-      // Generate unique room ID
-      const roomId = Math.random().toString(36).substring(2, 8).toUpperCase()
+      // REPLACE: Create room via API instead of localStorage
+      const response = await fetch("http://localhost:8000/api/rooms", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: formData.roomName,
+          topic_category: formData.topicCategory,
+          time_per_speaker: formData.timePerSpeaker,
+          max_participants: formData.maxParticipants,
+          is_public: formData.privacy === "public",
+          description: formData.description,
+          host_name: "Current User", // Replace with actual user name
+        }),
+      })
 
-      // Calculate total session duration (timePerSpeaker * maxParticipants)
-      const totalDuration = formData.timePerSpeaker * formData.maxParticipants
-
-      const roomData = {
-        id: roomId,
-        name: formData.roomName,
-        host_id: "current-user-id", // Replace with actual user ID
-        topic_category: formData.topicCategory,
-        time_per_speaker: formData.timePerSpeaker,
-        max_participants: formData.maxParticipants,
-        total_duration: totalDuration,
-        is_public: formData.privacy === "public",
-        description: formData.description,
-        status: "waiting",
-        created_at: new Date().toISOString(),
-        participants: [],
-        speaking_order: [],
+      const data = await response.json()
+      
+      if (data.room_id) {
+        // Navigate to the created room
+        router.push(`/rooms/${data.room_id}`)
+      } else {
+        throw new Error("Failed to create room")
       }
-
-      // Store room data in localStorage
-      const existingRooms = JSON.parse(localStorage.getItem("practiceRooms") || "[]")
-      existingRooms.push(roomData)
-      localStorage.setItem("practiceRooms", JSON.stringify(existingRooms))
-
-      // Redirect to room
-      router.push(`/rooms/${roomId}`)
     } catch (error) {
       console.error("Error creating room:", error)
       alert("Failed to create room. Please try again.")
@@ -158,7 +166,7 @@ export default function GroupPracticePage() {
       setIsCreating(false)
     }
   }
-
+  
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b">
@@ -200,6 +208,43 @@ export default function GroupPracticePage() {
               </Button>
             </div>
           </div>
+
+          {error && (
+            <div className="mb-6">
+              <Card className="border-red-200 bg-red-50">
+                <CardContent className="p-4">
+                  <div className="flex items-center space-x-2">
+                    <div className="w-4 h-4 bg-red-500 rounded-full flex-shrink-0"></div>
+                    <div>
+                      <p className="text-red-800 font-medium">Connection Error</p>
+                      <p className="text-red-600 text-sm">{error}</p>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="mt-2 text-red-600 border-red-300 hover:bg-red-100"
+                        onClick={() => window.location.reload()}
+                      >
+                        Retry Connection
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
+          {connectionStatus === "connecting" && !error && (
+            <div className="mb-6">
+              <Card className="border-blue-200 bg-blue-50">
+                <CardContent className="p-4">
+                  <div className="flex items-center space-x-2">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                    <p className="text-blue-800">Connecting to server...</p>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
 
           {activeTab === "join" && (
             <div className="space-y-6">

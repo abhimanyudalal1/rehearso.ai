@@ -16,6 +16,8 @@ export interface CallState {
 class WebRTCService {
   private localStream: MediaStream | null = null
   private peerConnections: Map<string, RTCPeerConnection> = new Map()
+  private signalingSocket: WebSocket | null = null // ADD THIS LINE
+  
   private callState: CallState = {
     isConnected: false,
     remoteStreams: new Map(),
@@ -30,7 +32,28 @@ class WebRTCService {
       { urls: "stun:stun2.l.google.com:19302" },
     ],
   }
-
+  // ADD THIS METHOD
+  async joinRoom(roomId: string) {
+    // Connect to the room's WebSocket for signaling
+    this.signalingSocket = new WebSocket(`ws://localhost:8000/ws/room/${roomId}`)
+    
+    this.signalingSocket.onmessage = (event) => {
+      const message = JSON.parse(event.data)
+      
+      if (message.type === "webrtc_offer") {
+        this.handleRemoteOffer(message.from, message.offer)
+      } else if (message.type === "webrtc_answer") {
+        this.handleAnswer(message.from, message.answer)
+      } else if (message.type === "webrtc_ice_candidate") {
+        this.handleIceCandidate(message.from, message.candidate)
+      }
+    }
+  }
+  // ADD THIS METHOD
+  async handleRemoteOffer(fromPeerId: string, offer: RTCSessionDescriptionInit) {
+    const answer = await this.createAnswer(fromPeerId, offer)
+    // Answer is automatically sent via WebSocket in createAnswer method
+  }
   async initializeLocalStream(
     constraints: MediaStreamConstraints = { video: true, audio: true },
   ): Promise<MediaStream> {
@@ -70,8 +93,13 @@ class WebRTCService {
 
     // Handle ICE candidates
     peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        this.onIceCandidate?.(peerId, event.candidate)
+      if (event.candidate && this.signalingSocket?.readyState === WebSocket.OPEN) {
+        this.signalingSocket.send(JSON.stringify({
+          type: "webrtc_ice_candidate",
+          from: "current-user-id", // Replace with actual user ID
+          to: peerId,
+          candidate: event.candidate
+        }))
       }
     }
 
@@ -100,6 +128,17 @@ class WebRTCService {
 
     const offer = await peerConnection.createOffer()
     await peerConnection.setLocalDescription(offer)
+    
+    // ADD: Send offer via WebSocket
+    if (this.signalingSocket?.readyState === WebSocket.OPEN) {
+      this.signalingSocket.send(JSON.stringify({
+        type: "webrtc_offer",
+        from: "current-user-id", // Replace with actual user ID
+        to: peerId,
+        offer: offer
+      }))
+    }
+    
     return offer
   }
 
@@ -112,6 +151,17 @@ class WebRTCService {
     await peerConnection.setRemoteDescription(offer)
     const answer = await peerConnection.createAnswer()
     await peerConnection.setLocalDescription(answer)
+    
+    // ADD: Send answer via WebSocket
+    if (this.signalingSocket?.readyState === WebSocket.OPEN) {
+      this.signalingSocket.send(JSON.stringify({
+        type: "webrtc_answer",
+        from: "current-user-id", // Replace with actual user ID
+        to: peerId,
+        answer: answer
+      }))
+    }
+    
     return answer
   }
 
@@ -213,6 +263,10 @@ class WebRTCService {
   }
 
   endCall(): void {
+    if (this.signalingSocket) {
+      this.signalingSocket.close()
+      this.signalingSocket = null
+    }
     // Close all peer connections
     this.peerConnections.forEach((peerConnection) => {
       peerConnection.close()
