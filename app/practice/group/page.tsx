@@ -16,6 +16,16 @@ export default function GroupPracticePage() {
   const [availableRooms, setAvailableRooms] = useState([])
   const [isLoading, setIsLoading] = useState(true)
 
+  const [formData, setFormData] = useState({
+    roomName: "",
+    maxParticipants: 6,
+    topicCategory: "Everyday Conversations",
+    timePerSpeaker: 2,
+    privacy: "public",
+    description: "",
+  })
+  const [isCreating, setIsCreating] = useState(false)
+
   useEffect(() => {
     const loadRooms = async () => {
       try {
@@ -60,20 +70,45 @@ export default function GroupPracticePage() {
   }
 
   const handleCreateRoom = async () => {
+    if (!formData.roomName.trim()) {
+      alert("Please enter a room name")
+      return
+    }
+
+    setIsCreating(true)
     try {
+      // Generate unique room ID
+      const roomId = Math.random().toString(36).substring(2, 8).toUpperCase()
+
+      // Calculate total session duration (timePerSpeaker * maxParticipants)
+      const totalDuration = formData.timePerSpeaker * formData.maxParticipants
+
       const roomData = {
-        name: "New Practice Room", // Get from form
+        id: roomId,
+        name: formData.roomName,
         host_id: "current-user-id", // Replace with actual user ID
-        topic_category: "Everyday Conversations", // Get from form
-        time_per_speaker: 2, // Get from form
-        max_participants: 6, // Get from form
-        is_public: true, // Get from form
+        topic_category: formData.topicCategory,
+        time_per_speaker: formData.timePerSpeaker,
+        max_participants: formData.maxParticipants,
+        total_duration: totalDuration,
+        is_public: formData.privacy === "public",
+        description: formData.description,
+        status: "waiting",
+        created_at: new Date().toISOString(),
       }
 
-      const room = await db.createRoom(roomData)
-      window.location.href = `/rooms/${room.id}`
+      // Store room data in localStorage for now (replace with actual backend later)
+      const existingRooms = JSON.parse(localStorage.getItem("practiceRooms") || "[]")
+      existingRooms.push(roomData)
+      localStorage.setItem("practiceRooms", JSON.stringify(existingRooms))
+
+      // Redirect to room
+      window.location.href = `/rooms/${roomId}`
     } catch (error) {
       console.error("Error creating room:", error)
+      alert("Failed to create room. Please try again.")
+    } finally {
+      setIsCreating(false)
     }
   }
 
@@ -263,17 +298,34 @@ export default function GroupPracticePage() {
                   <div className="grid md:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium mb-2">Room Name</label>
-                      <Input placeholder="e.g., Morning Practice Group" />
+                      <Input
+                        placeholder="e.g., Morning Practice Group"
+                        value={formData.roomName}
+                        onChange={(e) => setFormData({ ...formData, roomName: e.target.value })}
+                      />
                     </div>
                     <div>
                       <label className="block text-sm font-medium mb-2">Max Participants</label>
-                      <Input type="number" placeholder="6" min="2" max="10" />
+                      <Input
+                        type="number"
+                        placeholder="6"
+                        min="2"
+                        max="10"
+                        value={formData.maxParticipants}
+                        onChange={(e) =>
+                          setFormData({ ...formData, maxParticipants: Number.parseInt(e.target.value) || 6 })
+                        }
+                      />
                     </div>
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium mb-2">Speaking Topic Category</label>
-                    <select className="w-full p-2 border border-gray-300 rounded-md">
+                    <select
+                      className="w-full p-2 border border-gray-300 rounded-md"
+                      value={formData.topicCategory}
+                      onChange={(e) => setFormData({ ...formData, topicCategory: e.target.value })}
+                    >
                       <option>Everyday Conversations</option>
                       <option>Business & Professional</option>
                       <option>Current Events & Debate</option>
@@ -286,7 +338,11 @@ export default function GroupPracticePage() {
                   <div className="grid md:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium mb-2">Time per Speaker (minutes)</label>
-                      <select className="w-full p-2 border border-gray-300 rounded-md">
+                      <select
+                        className="w-full p-2 border border-gray-300 rounded-md"
+                        value={formData.timePerSpeaker}
+                        onChange={(e) => setFormData({ ...formData, timePerSpeaker: Number.parseInt(e.target.value) })}
+                      >
                         <option value="2">2 minutes</option>
                         <option value="3">3 minutes</option>
                         <option value="4">4 minutes</option>
@@ -295,7 +351,11 @@ export default function GroupPracticePage() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium mb-2">Room Privacy</label>
-                      <select className="w-full p-2 border border-gray-300 rounded-md">
+                      <select
+                        className="w-full p-2 border border-gray-300 rounded-md"
+                        value={formData.privacy}
+                        onChange={(e) => setFormData({ ...formData, privacy: e.target.value })}
+                      >
                         <option value="public">Public (anyone can join)</option>
                         <option value="private">Private (invite only)</option>
                       </select>
@@ -308,6 +368,8 @@ export default function GroupPracticePage() {
                       className="w-full p-2 border border-gray-300 rounded-md"
                       rows={3}
                       placeholder="Describe your practice session goals or any specific guidelines..."
+                      value={formData.description}
+                      onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                     />
                   </div>
 
@@ -323,10 +385,11 @@ export default function GroupPracticePage() {
 
                   <Button
                     onClick={handleCreateRoom}
+                    disabled={isCreating}
                     className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
                     size="lg"
                   >
-                    Create Room
+                    {isCreating ? "Creating Room..." : "Create Room"}
                   </Button>
                 </CardContent>
               </Card>

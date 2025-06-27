@@ -1,146 +1,305 @@
 "use client"
 
-import { Input } from "@/components/ui/input"
-
-import { useState, useEffect } from "react"
+import { use, useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Progress } from "@/components/ui/progress"
-import { Textarea } from "@/components/ui/textarea"
+import { Input } from "@/components/ui/input"
+import { useParams } from 'next/navigation'
 import {
-  Users,
-  Mic,
-  MicOff,
   Video,
   VideoOff,
-  Crown,
+  Mic,
+  MicOff,
+  Users,
+  Clock,
   MessageSquare,
   Send,
-  Copy,
-  Share2,
-  Settings,
-  LogOut,
+  ArrowLeft,
+  Play,
+  SkipForward,
+  Trophy,
+  Star,
+  Target,
 } from "lucide-react"
+import Link from "next/link"
+import { webrtcService } from "@/lib/webrtc"
+import { roomManager, type Room, type Participant } from "@/lib/room-manager"
 
-// Import WebRTC and database services
-import { webrtc } from "@/lib/webrtc"
-import { db } from "@/lib/database"
-import { aiAnalysis } from "@/lib/ai-analysis"
-
-export default function RoomPage({ params }: { params: { id: string } }) {
-  const [currentSpeaker, setCurrentSpeaker] = useState<number | null>(null)
+export default function RoomPage() {
+  const params = useParams()
+  const id = params?.id as string
+  const [room, setRoom] = useState<Room | null>(null)
+  const [currentUser] = useState({ id: "current-user-id", name: "You" })
+  const [isHost, setIsHost] = useState(false)
+  const [cameraEnabled, setCameraEnabled] = useState(true)
+  const [micEnabled, setMicEnabled] = useState(true)
+  const [feedbackMessage, setFeedbackMessage] = useState("")
   const [timeRemaining, setTimeRemaining] = useState(0)
-  const [isPreparation, setIsPreparation] = useState(false)
+  const [preparationTime, setPreparationTime] = useState(0)
+  const [sessionPhase, setSessionPhase] = useState<"waiting" | "preparation" | "speaking" | "feedback" | "completed">(
+    "waiting",
+  )
   const [currentTopic, setCurrentTopic] = useState("")
-  const [feedback, setFeedback] = useState("")
-  const [chatMessage, setChatMessage] = useState("")
-  const [isMuted, setIsMuted] = useState(false)
-  const [isCameraOff, setIsCameraOff] = useState(false)
+  const [showReport, setShowReport] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  // Update to load real room data
-  // Replace the roomData and participants with state:
-  const [roomData, setRoomData] = useState<any>(null)
-  const [participants, setParticipants] = useState<any>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null)
-  const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map())
+  const localVideoRef = useRef<HTMLVideoElement>(null)
+  const remoteVideosRef = useRef<Map<string, HTMLVideoElement>>(new Map())
 
-  const chatMessages = [
-    { id: 1, user: "Sarah Chen", message: "Welcome everyone! Let's start with introductions.", time: "2:30 PM" },
-    { id: 2, user: "Mike Johnson", message: "Great topic choice!", time: "2:32 PM" },
-    { id: 3, user: "Emma Wilson", message: "Looking forward to practicing together", time: "2:33 PM" },
-  ]
-
-  const topics = [
-    "Describe your ideal weekend",
-    "What's the most interesting place you've visited?",
-    "How has technology changed communication?",
-    "What skill would you like to learn and why?",
-    "Describe a person who has influenced your life",
-  ]
-
-  // Add useEffect to load room data and initialize WebRTC
   useEffect(() => {
-    const loadRoomData = async () => {
+    // Don't proceed if id is not available yet
+    if (!id) return
+
+    const loadRoom = () => {
       try {
-        // Load room details (you'll need to implement getRoomById in DatabaseService)
-        // const room = await db.getRoomById(params.id)
-        // setRoomData(room)
+        let rooms: Room[] = []
+        const roomsRaw = localStorage.getItem("practiceRooms")
+        
+        if (roomsRaw) {
+          try {
+            const parsed = JSON.parse(roomsRaw)
+            if (Array.isArray(parsed)) {
+              rooms = parsed
+            } else {
+              console.warn('practiceRooms is not an array:', parsed)
+              setError("Invalid room data format")
+              return
+            }
+          } catch (parseError) {
+            console.error('Failed to parse practiceRooms:', parseError)
+            setError("Failed to load room data")
+            return
+          }
+        }
 
-        // Load participants
-        const roomParticipants = await db.getRoomParticipants(params.id)
-        setParticipants(
-          roomParticipants.map((p) => ({
-            id: p.user_id,
-            name: p.user.name,
-            avatar: p.user.avatar_url,
-            isHost: false, // Determine from room data
-            isOnline: true,
-            hasSpoken: p.has_spoken,
-          })),
-        )
+        // Check if we have any rooms and a valid id
+        if (rooms.length === 0) {
+          setError("No rooms found. Please create a room first.")
+          return
+        }
 
-        // Initialize WebRTC
-        const stream = await webrtc.initializeLocalStream(true, true)
-        setLocalStream(stream)
+        if (!id) {
+          setError("Invalid room ID")
+          return
+        }
 
-        // Set up WebRTC callbacks
-        webrtc.setOnRemoteStream((stream, peerId) => {
-          setRemoteStreams((prev) => new Map(prev.set(peerId, stream)))
-        })
+        // Find the room safely
+        const foundRoom = rooms.find((r: Room) => r && r.id === id)
 
-        webrtc.setOnPeerDisconnected((peerId) => {
-          setRemoteStreams((prev) => {
-            const newMap = new Map(prev)
-            newMap.delete(peerId)
-            return newMap
+        if (!foundRoom) {
+          setError(`Room with ID "${id}" not found`)
+          return
+        }
+
+        // Ensure participants array exists
+        if (!foundRoom.participants) {
+          foundRoom.participants = []
+        }
+
+        setRoom(foundRoom)
+        setIsHost(foundRoom.host_id === currentUser.id)
+        setError(null) // Clear any previous errors
+
+        // Add current user as participant if not already added
+        const existingParticipant = foundRoom.participants.find((p: Participant) => p && p.id === currentUser.id)
+        
+        if (!existingParticipant) {
+          const success = roomManager.addParticipant(foundRoom.id, {
+            id: currentUser.id,
+            name: currentUser.name,
+            is_host: foundRoom.host_id === currentUser.id,
+            camera_enabled: true,
+            mic_enabled: true,
           })
-        })
+          
+          if (!success) {
+            setError("Failed to join room - room may be full")
+            return
+          }
+          
+          // Update the room state after adding participant
+          const updatedRoom = roomManager.getRoom(foundRoom.id)
+          if (updatedRoom) {
+            setRoom(updatedRoom)
+          }
+        }
+
       } catch (error) {
-        console.error("Error loading room data:", error)
-      } finally {
-        setIsLoading(false)
+        console.error('Error loading room:', error)
+        setError("Failed to load room")
       }
     }
 
-    loadRoomData()
+    loadRoom()
+    
+    // Only initialize WebRTC if we don't have an error
+    if (!error) {
+      initializeWebRTC()
+    }
 
-    // Cleanup on unmount
     return () => {
-      webrtc.disconnect()
+      webrtcService.endCall()
     }
-  }, [params.id])
+  }, [id, currentUser.id, error]) // Add error as dependency
 
-  useEffect(() => {
-    if (timeRemaining > 0) {
-      const timer = setTimeout(() => {
-        setTimeRemaining(timeRemaining - 1)
-      }, 1000)
-      return () => clearTimeout(timer)
-    } else if (timeRemaining === 0 && isPreparation) {
-      setIsPreparation(false)
-      setTimeRemaining(roomData?.timePerSpeaker * 60)
-    } else if (timeRemaining === 0 && currentSpeaker !== null) {
-      // Speaking time is up
-      setCurrentSpeaker(null)
-    }
-  }, [timeRemaining, isPreparation, currentSpeaker, roomData?.timePerSpeaker])
-
-  // Update the startSpeaking function to use AI topic generation
-  const startSpeaking = async (participantId: number) => {
+  const initializeWebRTC = async () => {
     try {
-      const topics = await aiAnalysis.generateTopics(roomData?.topic_category || "General", 1)
-      setCurrentTopic(topics[0] || "Describe your ideal weekend")
+      const stream = await webrtcService.initializeLocalStream()
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream
+      }
+
+      // Set up WebRTC event handlers
+      webrtcService.onRemoteStreamAdded = (peerId: string, stream: MediaStream) => {
+        const videoElement = remoteVideosRef.current.get(peerId)
+        if (videoElement) {
+          videoElement.srcObject = stream
+        }
+      }
     } catch (error) {
-      console.error("Error generating topic:", error)
-      setCurrentTopic("Describe your ideal weekend")
+      console.error("Failed to initialize WebRTC:", error)
+      setError("Failed to initialize video/audio")
+    }
+  }
+
+  const toggleCamera = () => {
+    const newState = !cameraEnabled
+    setCameraEnabled(newState)
+    webrtcService.toggleVideo(newState)
+
+    if (room) {
+      roomManager.updateParticipantMedia(room.id, currentUser.id, newState, micEnabled)
+    }
+  }
+
+  const toggleMic = () => {
+    const newState = !micEnabled
+    setMicEnabled(newState)
+    webrtcService.toggleAudio(newState)
+
+    if (room) {
+      roomManager.updateParticipantMedia(room.id, currentUser.id, cameraEnabled, newState)
+    }
+  }
+
+  const startSession = () => {
+    if (!room || !isHost) return
+
+    roomManager.startSession(room.id)
+    setSessionPhase("preparation")
+    setPreparationTime(60) // 1 minute preparation
+    generateTopic()
+
+    // Start preparation timer
+    const prepTimer = setInterval(() => {
+      setPreparationTime((prev) => {
+        if (prev <= 1) {
+          clearInterval(prepTimer)
+          startSpeaking()
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+  }
+
+  const generateTopic = () => {
+    const topics = {
+      "Everyday Conversations": [
+        "Describe your ideal weekend and why it appeals to you",
+        "Talk about a skill you'd like to learn and your motivation",
+        "Share your thoughts on the importance of friendship",
+        "Discuss a memorable meal you've had and what made it special",
+      ],
+      "Business & Professional": [
+        "Present your idea for improving workplace productivity",
+        "Discuss the future of remote work in your industry",
+        "Explain how to give effective feedback to colleagues",
+        "Describe the qualities of a great leader",
+      ],
+      "Current Events & Debate": [
+        "Argue for or against social media age restrictions",
+        "Discuss the impact of AI on future job markets",
+        "Present your views on sustainable transportation",
+        "Debate the role of technology in education",
+      ],
     }
 
-    setCurrentSpeaker(participantId)
-    setIsPreparation(true)
-    setTimeRemaining(60) // 1 minute preparation
+    const categoryTopics = topics[room?.topic_category as keyof typeof topics] || topics["Everyday Conversations"]
+    const randomTopic = categoryTopics[Math.floor(Math.random() * categoryTopics.length)]
+    setCurrentTopic(randomTopic)
+  }
+
+  const startSpeaking = () => {
+    if (!room) return
+
+    setSessionPhase("speaking")
+    setTimeRemaining(room.time_per_speaker * 60) // Convert minutes to seconds
+
+    // Start speaking timer
+    const speakTimer = setInterval(() => {
+      setTimeRemaining((prev) => {
+        if (prev <= 1) {
+          clearInterval(speakTimer)
+          endCurrentSpeech()
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+  }
+
+  const endCurrentSpeech = () => {
+    setSessionPhase("feedback")
+
+    // Auto-advance to next speaker after 30 seconds of feedback time
+    setTimeout(() => {
+      nextSpeaker()
+    }, 30000)
+  }
+
+  const nextSpeaker = () => {
+    if (!room) return
+
+    const success = roomManager.nextSpeaker(room.id)
+    if (success) {
+      const updatedRoom = roomManager.getRoom(room.id)
+      if (updatedRoom?.status === "completed") {
+        setSessionPhase("completed")
+        setShowReport(true)
+      } else {
+        setSessionPhase("preparation")
+        setPreparationTime(60)
+        generateTopic()
+
+        // Start next preparation timer
+        const prepTimer = setInterval(() => {
+          setPreparationTime((prev) => {
+            if (prev <= 1) {
+              clearInterval(prepTimer)
+              startSpeaking()
+              return 0
+            }
+            return prev - 1
+          })
+        }, 1000)
+      }
+    }
+  }
+
+  const sendFeedback = () => {
+    if (!room || !feedbackMessage.trim()) return
+
+    const currentSpeaker = room.participants.find((p) => p.id === room.current_speaker)
+    if (currentSpeaker && currentSpeaker.id !== currentUser.id) {
+      roomManager.addFeedback(room.id, currentSpeaker.id, {
+        from_participant: currentUser.id,
+        message: feedbackMessage,
+        type: "constructive",
+      })
+      setFeedbackMessage("")
+    }
   }
 
   const formatTime = (seconds: number) => {
@@ -149,384 +308,354 @@ export default function RoomPage({ params }: { params: { id: string } }) {
     return `${mins}:${secs.toString().padStart(2, "0")}`
   }
 
-  const submitFeedback = () => {
-    if (feedback.trim()) {
-      // Submit feedback logic here
-      setFeedback("")
-    }
-  }
-
-  const sendChatMessage = () => {
-    if (chatMessage.trim()) {
-      // Send message logic here
-      setChatMessage("")
-    }
-  }
-
-  const copyRoomCode = () => {
-    navigator.clipboard.writeText(roomData.code)
-  }
-
-  // Update the mute/camera toggle functions to use WebRTC
-  const toggleMute = () => {
-    const newMutedState = !isMuted
-    setIsMuted(newMutedState)
-    webrtc.toggleAudio(!newMutedState)
-  }
-
-  const toggleCamera = () => {
-    const newCameraState = !isCameraOff
-    setIsCameraOff(newCameraState)
-    webrtc.toggleVideo(!newCameraState)
-  }
-
-  // Add loading state
-  return (
-    <>
-      {isLoading ? (
-        <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-            <p className="text-gray-600">Loading room...</p>
+  // Show error state
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center max-w-md mx-auto p-6">
+          <div className="text-red-500 text-6xl mb-4">⚠️</div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Room Error</h2>
+          <p className="text-gray-600 mb-6">{error}</p>
+          <div className="space-y-3">
+            <Link href="/practice/group">
+              <Button className="w-full">Browse Available Rooms</Button>
+            </Link>
+            <Button 
+              variant="outline" 
+              onClick={() => window.location.reload()}
+              className="w-full"
+            >
+              Retry Loading
+            </Button>
           </div>
         </div>
-      ) : (
-        <div className="min-h-screen bg-gray-50">
-          {/* Header */}
-          <header className="bg-white border-b">
-            <div className="container mx-auto px-4 py-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-4">
-                  <h1 className="text-xl font-semibold">{roomData?.name}</h1>
-                  <Badge variant="secondary">{roomData?.isPublic ? "Public" : "Private"}</Badge>
-                  <div className="flex items-center space-x-2 text-sm text-gray-600">
-                    <span>Room Code:</span>
-                    <code className="bg-gray-100 px-2 py-1 rounded">{roomData?.code}</code>
-                    <Button variant="ghost" size="sm" onClick={copyRoomCode}>
-                      <Copy className="w-4 h-4" />
-                    </Button>
+      </div>
+    )
+  }
+
+  // Show loading if id is not available yet or room is not loaded
+  if (!id || !room) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading room...</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-white border-b">
+        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
+          <Link href="/practice/group">
+            <Button variant="ghost" size="sm">
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              Back to Rooms
+            </Button>
+          </Link>
+
+          <div className="flex items-center space-x-4">
+            <Badge variant="outline">Room: {room.id}</Badge>
+            <Badge variant={room.status === "active" ? "default" : "secondary"}>
+              {room.status === "waiting" ? "Waiting" : room.status === "active" ? "Live" : "Completed"}
+            </Badge>
+          </div>
+        </div>
+      </header>
+
+      <div className="container mx-auto px-4 py-6">
+        <div className="grid lg:grid-cols-4 gap-6">
+          {/* Main Video Area */}
+          <div className="lg:col-span-3">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center space-x-2">
+                    <Users className="w-5 h-5" />
+                    <span>{room.name}</span>
+                  </CardTitle>
+
+                  {sessionPhase === "preparation" && (
+                    <div className="flex items-center space-x-2 text-orange-600">
+                      <Clock className="w-4 h-4" />
+                      <span className="font-bold">Prep: {formatTime(preparationTime)}</span>
+                    </div>
+                  )}
+
+                  {sessionPhase === "speaking" && (
+                    <div className="flex items-center space-x-2 text-red-600">
+                      <Clock className="w-4 h-4" />
+                      <span className="font-bold">Speaking: {formatTime(timeRemaining)}</span>
+                    </div>
+                  )}
+                </div>
+              </CardHeader>
+
+              <CardContent>
+                {/* Current Topic Display */}
+                {(sessionPhase === "preparation" || sessionPhase === "speaking") && currentTopic && (
+                  <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg mb-6">
+                    <h3 className="font-medium text-blue-900 mb-2">Current Topic:</h3>
+                    <p className="text-blue-800">{currentTopic}</p>
                   </div>
-                </div>
-
-                <div className="flex items-center space-x-2">
-                  <Button variant="ghost" size="sm">
-                    <Share2 className="w-4 h-4 mr-2" />
-                    Invite
-                  </Button>
-                  <Button variant="ghost" size="sm">
-                    <Settings className="w-4 h-4 mr-2" />
-                    Settings
-                  </Button>
-                  <Button variant="outline" size="sm">
-                    <LogOut className="w-4 h-4 mr-2" />
-                    Leave Room
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </header>
-
-          <div className="container mx-auto px-4 py-6">
-            <div className="grid lg:grid-cols-4 gap-6">
-              {/* Main Content */}
-              <div className="lg:col-span-3 space-y-6">
-                {/* Current Speaker Section */}
-                {currentSpeaker ? (
-                  <Card className="border-2 border-blue-200 bg-blue-50">
-                    <CardHeader>
-                      <div className="flex items-center justify-between">
-                        <CardTitle className="flex items-center">
-                          <Mic className="w-5 h-5 mr-2 text-blue-600" />
-                          {isPreparation ? "Preparation Time" : "Speaking Time"}
-                        </CardTitle>
-                        <div className="text-3xl font-bold text-blue-600">{formatTime(timeRemaining)}</div>
-                      </div>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-4">
-                        <div className="flex items-center space-x-3">
-                          <Avatar>
-                            <AvatarImage
-                              src={participants.find((p) => p.id === currentSpeaker)?.avatar || "/placeholder.svg"}
-                            />
-                            <AvatarFallback>
-                              {participants
-                                .find((p) => p.id === currentSpeaker)
-                                ?.name.split(" ")
-                                .map((n) => n[0])
-                                .join("")}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div>
-                            <div className="font-medium">
-                              {participants.find((p) => p.id === currentSpeaker)?.name} is speaking
-                            </div>
-                            <div className="text-sm text-gray-600">Topic: {currentTopic}</div>
-                          </div>
-                        </div>
-
-                        <Progress
-                          value={
-                            isPreparation
-                              ? ((60 - timeRemaining) / 60) * 100
-                              : ((roomData?.timePerSpeaker * 60 - timeRemaining) / (roomData?.timePerSpeaker * 60)) *
-                                100
-                          }
-                          className="h-2"
-                        />
-
-                        {isPreparation && (
-                          <div className="bg-white p-4 rounded-lg">
-                            <h4 className="font-medium mb-2">Preparation Tips:</h4>
-                            <ul className="text-sm text-gray-600 space-y-1">
-                              <li>• Think of 2-3 main points</li>
-                              <li>• Consider personal examples</li>
-                              <li>• Plan your opening and closing</li>
-                            </ul>
-                          </div>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ) : (
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Waiting for Next Speaker</CardTitle>
-                      <CardDescription>Click "Start Speaking" when you're ready to practice</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="text-center py-8">
-                        <Mic className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-                        <p className="text-gray-600 mb-4">Ready to practice your speaking skills?</p>
-                        <Button
-                          onClick={() => startSpeaking(4)} // Assuming user is participant 4
-                          className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
-                        >
-                          Start Speaking
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
                 )}
 
                 {/* Video Grid */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Participants</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="grid grid-cols-2 gap-4">
-                      {participants.map((participant) => (
-                        <div key={participant.id} className="relative">
-                          <div
-                            className={`aspect-video bg-gray-800 rounded-lg flex items-center justify-center ${
-                              currentSpeaker === participant.id ? "ring-2 ring-blue-500" : ""
-                            }`}
-                          >
-                            <div className="text-center text-white">
-                              <Avatar className="w-16 h-16 mx-auto mb-2">
-                                <AvatarImage src={participant.avatar || "/placeholder.svg"} />
-                                <AvatarFallback>
-                                  {participant.name
-                                    .split(" ")
-                                    .map((n) => n[0])
-                                    .join("")}
-                                </AvatarFallback>
-                              </Avatar>
-                              <div className="text-sm">{participant.name}</div>
-                            </div>
-                          </div>
-
-                          <div className="absolute top-2 left-2 flex space-x-1">
-                            {participant.isHost && (
-                              <Badge className="bg-yellow-500 text-white text-xs">
-                                <Crown className="w-3 h-3 mr-1" />
-                                Host
-                              </Badge>
-                            )}
-                            {participant.hasSpoken && (
-                              <Badge className="bg-green-500 text-white text-xs">✓ Spoke</Badge>
-                            )}
-                          </div>
-
-                          <div className="absolute bottom-2 right-2 flex space-x-1">
-                            <div className="w-6 h-6 bg-black/50 rounded-full flex items-center justify-center">
-                              {participant.id === 4 ? (
-                                isMuted ? (
-                                  <MicOff className="w-3 h-3 text-red-400" />
-                                ) : (
-                                  <Mic className="w-3 h-3 text-green-400" />
-                                )
-                              ) : (
-                                <Mic className="w-3 h-3 text-green-400" />
-                              )}
-                            </div>
-                            <div className="w-6 h-6 bg-black/50 rounded-full flex items-center justify-center">
-                              {participant.id === 4 ? (
-                                isCameraOff ? (
-                                  <VideoOff className="w-3 h-3 text-red-400" />
-                                ) : (
-                                  <Video className="w-3 h-3 text-green-400" />
-                                )
-                              ) : (
-                                <Video className="w-3 h-3 text-green-400" />
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
+                <div className="grid grid-cols-2 gap-4 mb-6">
+                  {/* Local Video */}
+                  <div className="relative aspect-video bg-gray-800 rounded-lg overflow-hidden">
+                    <video ref={localVideoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
+                    <div className="absolute bottom-2 left-2 bg-black/50 text-white px-2 py-1 rounded text-sm">
+                      You {room.current_speaker === currentUser.id && sessionPhase === "speaking" && "(Speaking)"}
                     </div>
-
-                    {/* Controls */}
-                    <div className="flex justify-center space-x-4 mt-6">
-                      <Button variant={isMuted ? "destructive" : "default"} size="sm" onClick={toggleMute}>
-                        {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-                      </Button>
-                      <Button variant={isCameraOff ? "destructive" : "default"} size="sm" onClick={toggleCamera}>
-                        {isCameraOff ? <VideoOff className="w-4 h-4" /> : <Video className="w-4 h-4" />}
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Feedback Section */}
-                {!currentSpeaker && (
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Provide Feedback</CardTitle>
-                      <CardDescription>Share constructive feedback for the last speaker</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-4">
-                        <Textarea
-                          placeholder="Share your thoughts on the speaker's delivery, content, or areas for improvement..."
-                          value={feedback}
-                          onChange={(e) => setFeedback(e.target.value)}
-                          rows={3}
-                        />
-                        <Button onClick={submitFeedback} disabled={!feedback.trim()}>
-                          <Send className="w-4 h-4 mr-2" />
-                          Submit Feedback
-                        </Button>
+                    <div className="absolute bottom-2 right-2 flex space-x-1">
+                      <div
+                        className={`w-6 h-6 rounded-full flex items-center justify-center ${micEnabled ? "bg-green-600" : "bg-red-600"}`}
+                      >
+                        {micEnabled ? (
+                          <Mic className="w-3 h-3 text-white" />
+                        ) : (
+                          <MicOff className="w-3 h-3 text-white" />
+                        )}
                       </div>
-                    </CardContent>
-                  </Card>
-                )}
-              </div>
+                      <div
+                        className={`w-6 h-6 rounded-full flex items-center justify-center ${cameraEnabled ? "bg-green-600" : "bg-red-600"}`}
+                      >
+                        {cameraEnabled ? (
+                          <Video className="w-3 h-3 text-white" />
+                        ) : (
+                          <VideoOff className="w-3 h-3 text-white" />
+                        )}
+                      </div>
+                    </div>
+                  </div>
 
-              {/* Sidebar */}
-              <div className="space-y-6">
-                {/* Room Info */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-lg">Room Details</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Topic Category</span>
-                      <span className="font-medium">{roomData?.topic}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Time per Speaker</span>
-                      <span className="font-medium">{roomData?.timePerSpeaker} min</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Participants</span>
-                      <span className="font-medium">{participants.length}/6</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Host</span>
-                      <span className="font-medium">{roomData?.host}</span>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Participants List */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center text-lg">
-                      <Users className="w-5 h-5 mr-2" />
-                      Participants ({participants.length})
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-3">
-                      {participants.map((participant) => (
-                        <div key={participant.id} className="flex items-center space-x-3">
-                          <Avatar className="w-8 h-8">
-                            <AvatarImage src={participant.avatar || "/placeholder.svg"} />
-                            <AvatarFallback className="text-xs">
-                              {participant.name
-                                .split(" ")
-                                .map((n) => n[0])
-                                .join("")}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div className="flex-1">
-                            <div className="flex items-center space-x-2">
-                              <span className="text-sm font-medium">{participant.name}</span>
-                              {participant.isHost && <Crown className="w-3 h-3 text-yellow-500" />}
-                            </div>
-                            <div className="flex items-center space-x-2">
-                              <div
-                                className={`w-2 h-2 rounded-full ${participant.isOnline ? "bg-green-500" : "bg-gray-400"}`}
-                              ></div>
-                              <span className="text-xs text-gray-500">
-                                {participant.isOnline ? "Online" : "Offline"}
-                              </span>
-                              {participant.hasSpoken && (
-                                <Badge variant="secondary" className="text-xs">
-                                  Spoke
-                                </Badge>
-                              )}
-                            </div>
+                  {/* Remote Videos */}
+                  {room.participants
+                    .filter((p) => p && p.id !== currentUser.id)
+                    .map((participant) => (
+                      <div
+                        key={participant.id}
+                        className="relative aspect-video bg-gray-800 rounded-lg overflow-hidden"
+                      >
+                        <video
+                          ref={(el) => {
+                            if (el) remoteVideosRef.current.set(participant.id, el)
+                          }}
+                          autoPlay
+                          playsInline
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute bottom-2 left-2 bg-black/50 text-white px-2 py-1 rounded text-sm">
+                          {participant.name}{" "}
+                          {room.current_speaker === participant.id && sessionPhase === "speaking" && "(Speaking)"}
+                          {participant.is_host && " (Host)"}
+                        </div>
+                        <div className="absolute bottom-2 right-2 flex space-x-1">
+                          <div
+                            className={`w-6 h-6 rounded-full flex items-center justify-center ${participant.mic_enabled ? "bg-green-600" : "bg-red-600"}`}
+                          >
+                            {participant.mic_enabled ? (
+                              <Mic className="w-3 h-3 text-white" />
+                            ) : (
+                              <MicOff className="w-3 h-3 text-white" />
+                            )}
+                          </div>
+                          <div
+                            className={`w-6 h-6 rounded-full flex items-center justify-center ${participant.camera_enabled ? "bg-green-600" : "bg-red-600"}`}
+                          >
+                            {participant.camera_enabled ? (
+                              <Video className="w-3 h-3 text-white" />
+                            ) : (
+                              <VideoOff className="w-3 h-3 text-white" />
+                            )}
                           </div>
                         </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
+                      </div>
+                    ))}
+                </div>
 
-                {/* Chat */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center text-lg">
-                      <MessageSquare className="w-5 h-5 mr-2" />
-                      Chat
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-3 max-h-64 overflow-y-auto mb-4">
-                      {chatMessages.map((message) => (
-                        <div key={message.id} className="text-sm">
-                          <div className="flex items-center space-x-2 mb-1">
-                            <span className="font-medium">{message.user}</span>
-                            <span className="text-xs text-gray-500">{message.time}</span>
-                          </div>
-                          <p className="text-gray-700">{message.message}</p>
+                {/* Controls */}
+                <div className="flex justify-center space-x-4">
+                  <Button onClick={toggleMic} variant={micEnabled ? "default" : "destructive"} size="lg">
+                    {micEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
+                  </Button>
+
+                  <Button onClick={toggleCamera} variant={cameraEnabled ? "default" : "destructive"} size="lg">
+                    {cameraEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
+                  </Button>
+
+                  {isHost && sessionPhase === "waiting" && (
+                    <Button onClick={startSession} className="bg-green-600 hover:bg-green-700" size="lg">
+                      <Play className="w-5 h-5 mr-2" />
+                      Start Session
+                    </Button>
+                  )}
+
+                  {isHost && sessionPhase === "speaking" && (
+                    <Button onClick={endCurrentSpeech} className="bg-orange-600 hover:bg-orange-700" size="lg">
+                      <SkipForward className="w-5 h-5 mr-2" />
+                      Next Speaker
+                    </Button>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Sidebar */}
+          <div className="space-y-6">
+            {/* Room Info */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Room Details</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Participants:</span>
+                  <span className="font-medium">
+                    {room.participants?.length || 0}/{room.max_participants}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Time per speaker:</span>
+                  <span className="font-medium">{room.time_per_speaker} min</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Topic:</span>
+                  <span className="font-medium text-sm">{room.topic_category}</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Speaking Order */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Speaking Order</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {room.speaking_order?.map((participantId, index) => {
+                    const participant = room.participants?.find((p) => p && p.id === participantId)
+                    const isCurrent = room.current_speaker === participantId
+                    const hasSpoken = participant?.has_spoken
+
+                    if (!participant) return null
+
+                    return (
+                      <div
+                        key={participantId}
+                        className={`flex items-center space-x-3 p-2 rounded ${
+                          isCurrent ? "bg-blue-100 border border-blue-300" : hasSpoken ? "bg-green-50" : "bg-gray-50"
+                        }`}
+                      >
+                        <div
+                          className={`w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold ${
+                            isCurrent
+                              ? "bg-blue-600 text-white"
+                              : hasSpoken
+                                ? "bg-green-600 text-white"
+                                : "bg-gray-400 text-white"
+                          }`}
+                        >
+                          {index + 1}
                         </div>
-                      ))}
+                        <span className="flex-1">{participant.name}</span>
+                        {hasSpoken && (
+                          <Badge variant="secondary" className="text-xs">
+                            Done
+                          </Badge>
+                        )}
+                        {isCurrent && <Badge className="text-xs">Speaking</Badge>}
+                      </div>
+                    )
+                  }) || <p className="text-gray-500 text-sm">No speaking order set yet</p>}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Live Feedback */}
+            {sessionPhase === "speaking" && room.current_speaker !== currentUser.id && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center">
+                    <MessageSquare className="w-4 h-4 mr-2" />
+                    Send Feedback
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    <Input
+                      placeholder="Type constructive feedback..."
+                      value={feedbackMessage}
+                      onChange={(e) => setFeedbackMessage(e.target.value)}
+                      onKeyPress={(e) => e.key === "Enter" && sendFeedback()}
+                    />
+                    <Button onClick={sendFeedback} disabled={!feedbackMessage.trim()} className="w-full">
+                      <Send className="w-4 h-4 mr-2" />
+                      Send Feedback
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Session Complete - Show Report */}
+            {showReport && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center">
+                    <Trophy className="w-4 h-4 mr-2" />
+                    Your Performance Report
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div>
+                        <div className="text-2xl font-bold text-blue-600">87</div>
+                        <div className="text-xs text-gray-600">Overall</div>
+                      </div>
+                      <div>
+                        <div className="text-2xl font-bold text-green-600">92</div>
+                        <div className="text-xs text-gray-600">Clarity</div>
+                      </div>
+                      <div>
+                        <div className="text-2xl font-bold text-purple-600">85</div>
+                        <div className="text-xs text-gray-600">Confidence</div>
+                      </div>
                     </div>
 
-                    <div className="flex space-x-2">
-                      <Input
-                        placeholder="Type a message..."
-                        value={chatMessage}
-                        onChange={(e) => setChatMessage(e.target.value)}
-                        onKeyPress={(e) => e.key === "Enter" && sendChatMessage()}
-                        className="text-sm"
-                      />
-                      <Button size="sm" onClick={sendChatMessage} disabled={!chatMessage.trim()}>
-                        <Send className="w-4 h-4" />
-                      </Button>
+                    <div>
+                      <h4 className="font-medium text-green-600 mb-2 flex items-center">
+                        <Star className="w-4 h-4 mr-1" />
+                        Strengths
+                      </h4>
+                      <ul className="text-sm space-y-1">
+                        <li>• Clear articulation</li>
+                        <li>• Good use of examples</li>
+                      </ul>
                     </div>
-                  </CardContent>
-                </Card>
-              </div>
-            </div>
+
+                    <div>
+                      <h4 className="font-medium text-orange-600 mb-2 flex items-center">
+                        <Target className="w-4 h-4 mr-1" />
+                        Improve
+                      </h4>
+                      <ul className="text-sm space-y-1">
+                        <li>• Reduce filler words</li>
+                        <li>• Maintain eye contact</li>
+                      </ul>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </div>
         </div>
-      )}
-    </>
+      </div>
+    </div>
   )
 }
