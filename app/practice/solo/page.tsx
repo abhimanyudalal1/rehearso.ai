@@ -42,8 +42,24 @@ export default function SoloPracticePage() {
   // Update the state to include real analysis
   const [speechMetrics, setSpeechMetrics] = useState<SpeechMetrics | null>(null)
   const [analysisResult, setAnalysisResult] = useState<SpeechAnalysis | null>(null)
+  const [isEndingSession, setIsEndingSession] = useState(false)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
-
+  const [sessionData, setSessionData] = useState({
+  mediapipe_data: {
+    session_duration: 0,
+    good_posture_seconds: 0,
+    hand_gestures_seconds: 0,
+    speaking_seconds: 0
+  },
+  text_chunks: []
+})
+const [finalReport, setFinalReport] = useState("")
+const [sessionScores, setSessionScores] = useState<{
+  total_score:number;
+  posture_score: number;
+  gesture_score: number;
+  speaking_score: number;
+} | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const timerRef = useRef<NodeJS.Timeout>()
   const mediaStreamRef = useRef<MediaStream | null>(null)
@@ -269,11 +285,111 @@ useEffect(() => {
       mediaStreamRef.current = null
     }
   }
-  // Update the handleStopRecording function to analyze speech
+  // Add this function after the stopMediaDevices function around line 281
+const collectSessionDataAndGenerateReport = async () => {
+  try {
+    // Get session data from iframe
+    const iframe = document.querySelector('iframe[title="MediaPipe Analysis"]') as HTMLIFrameElement
+    if (iframe && iframe.contentWindow) {
+      iframe.contentWindow.postMessage({ action: "getSessionData" }, "*")
+    }
+
+    // Listen for session data from iframe
+    const handleMessage = async (event: MessageEvent) => {
+      if (event.data.type === "sessionData") {
+        const data = event.data.data
+        
+        // Send data to backend
+        const response = await fetch("http://localhost:8000/submit-session-data", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            mediapipe_data: {
+              session_duration: data.sessionDuration,
+              good_posture_seconds: data.goodPostureSeconds,
+              hand_gestures_seconds: data.handGesturesSeconds,
+              speaking_seconds: data.speakingSeconds
+            },
+            text_chunks: data.textChunks
+          })
+        })
+
+        if (response.ok) {
+          const result = await response.json()
+          setFinalReport(result.report)
+          // Store the session scores
+          setSessionScores({
+            total_score:result.session_summary.total_score,
+            posture_score: result.session_summary.posture_score,
+            gesture_score: result.session_summary.gesture_score,
+            speaking_score: result.session_summary.speaking_score
+          })
+        } else {
+          console.error("Failed to generate report")
+        }
+        
+        window.removeEventListener("message", handleMessage)
+      }
+    }
+
+    window.addEventListener("message", handleMessage)
+  } catch (error) {
+    console.error("Error generating report:", error)
+  }
+}
+// Add this function after collectSessionDataAndGenerateReport
+const downloadReport = () => {
+  const reportContent = `
+Speech Analysis Report
+======================
+
+Session Topic: ${currentTopic}
+Duration: ${speechMetrics?.duration || 0} seconds
+
+AI-Generated Analysis:
+${finalReport}
+
+Performance Metrics:
+- Overall Score: ${analysisResult?.overallScore || 'N/A'}
+- Voice Clarity: ${analysisResult?.voiceClarity || 'N/A'}
+- Body Language: ${analysisResult?.bodyLanguage || 'N/A'}
+- Confidence: ${analysisResult?.confidence || 'N/A'}
+
+Strengths:
+${analysisResult?.strengths?.map(s => `- ${s}`).join('\n') || 'N/A'}
+
+Areas for Improvement:
+${analysisResult?.improvements?.map(i => `- ${i}`).join('\n') || 'N/A'}
+
+Generated on: ${new Date().toLocaleString()}
+  `
+
+  const blob = new Blob([reportContent], { type: 'text/plain' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `speech-analysis-${new Date().toISOString().split('T')[0]}.txt`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
   const handleStopRecording = async () => {
-    setIsRecording(false)
+  setIsEndingSession(true) // Show spinner immediately
+  setIsRecording(false)
+  stopMediaDevices()
+  
+  // Show spinner for at least 3 seconds
+  setTimeout(() => {
+    setIsEndingSession(false)
+  }, 6000)
+  
+  // Add a small delay before starting the analysis
+  setTimeout(async () => {
     setIsAnalyzing(true)
-    stopMediaDevices()
+    
     try {
       // Get speech metrics
       const metrics = speechRecognition.stopRecording()
@@ -287,6 +403,9 @@ useEffect(() => {
         gestureCount: metrics.gestureCount,
       })
       setAnalysisResult(analysis)
+
+      // Collect session data and generate report
+      await collectSessionDataAndGenerateReport()
 
       // Save session to MongoDB backend
       try {
@@ -327,11 +446,12 @@ useEffect(() => {
       setIsAnalyzing(false)
       setCurrentStep("feedback")
     }
+  }, 500) // Small delay before analysis starts
 
-    if (timerRef.current) {
-      clearTimeout(timerRef.current)
-    }
+  if (timerRef.current) {
+    clearTimeout(timerRef.current)
   }
+}
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -339,16 +459,27 @@ useEffect(() => {
     return `${mins}:${secs.toString().padStart(2, "0")}`
   }
 
-  const resetSession = () => {
-    setCurrentStep("setup")
-    setIsRecording(false)
-    setTimeRemaining(0)
-    setLiveFeedback([])
-    setCurrentTopic("")
+const resetSession = () => {
+  setCurrentStep("setup")
+  setIsRecording(false)
+  setTimeRemaining(0)
+  setLiveFeedback([])
+  setCurrentTopic("")
+  setSessionData({
+    mediapipe_data: {
+      session_duration: 0,
+      good_posture_seconds: 0,
+      hand_gestures_seconds: 0,
+      speaking_seconds: 0
+    },
+    text_chunks: []
+  })
+  setFinalReport("")
+  setSessionScores(null) // Reset session scores
 
-    // Stop media devices when resetting
-    stopMediaDevices()
-  }
+  // Stop media devices when resetting
+  stopMediaDevices()
+}
 
   if (currentStep === "setup") {
     return (
@@ -641,36 +772,51 @@ useEffect(() => {
     )
   }
 
-  if (currentStep === "speaking") {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <div className="container mx-auto px-4 py-4">
-          {/* Top Bar */}
-          <div className="flex items-center justify-between mb-4 bg-white p-4 rounded-lg shadow-sm">
-            <div className="flex items-center space-x-4">
-              <Badge className="bg-red-600 text-white">
-                <div className="w-2 h-2 bg-white rounded-full mr-2 animate-pulse"></div>
-                LIVE
-              </Badge>
-              <div className="text-2xl font-bold text-gray-900">{formatTime(timeRemaining)}</div>
-            </div>
-
-            <div className="flex items-center space-x-2">
-              <Button variant={isMicOn ? "default" : "destructive"} size="sm" onClick={() => setIsMicOn(!isMicOn)}>
-                {isMicOn ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-              </Button>
-              <Button
-                variant={isCameraOn ? "default" : "destructive"}
-                size="sm"
-                onClick={() => setIsCameraOn(!isCameraOn)}
-              >
-                {isCameraOn ? <Video className="w-4 h-4" /> : <VideoOff className="w-4 h-4" />}
-              </Button>
-              <Button variant="destructive" onClick={handleStopRecording}>
-                Stop Session
-              </Button>
-            </div>
+if (currentStep === "speaking") {
+  return (
+    <div className="min-h-screen bg-gray-50 relative">
+      {/* End Session Spinner Overlay - Analytics Style */}
+      {isEndingSession && (
+        <div className="min-h-screen bg-gray-50 flex items-center justify-center fixed inset-0 z-50">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+            <p className="text-gray-600">Ending session and preparing your analysis...</p>
           </div>
+        </div>
+      )}
+
+      <div className="container mx-auto px-4 py-4">
+        {/* Top Bar */}
+        <div className="flex items-center justify-between mb-4 bg-white p-4 rounded-lg shadow-sm">
+          <div className="flex items-center space-x-4">
+            <Badge className="bg-red-600 text-white">
+              <div className="w-2 h-2 bg-white rounded-full mr-2 animate-pulse"></div>
+              LIVE
+            </Badge>
+            <div className="text-2xl font-bold text-gray-900">{formatTime(timeRemaining)}</div>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <Button variant={isMicOn ? "default" : "destructive"} size="sm" onClick={() => setIsMicOn(!isMicOn)}>
+              {isMicOn ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+            </Button>
+            <Button
+              variant={isCameraOn ? "default" : "destructive"}
+              size="sm"
+              onClick={() => setIsCameraOn(!isCameraOn)}
+            >
+              {isCameraOn ? <Video className="w-4 h-4" /> : <VideoOff className="w-4 h-4" />}
+            </Button>
+            <Button 
+              variant="destructive" 
+              onClick={handleStopRecording}
+              disabled={isEndingSession}
+            >
+              {isEndingSession ? "Ending..." : "Stop Session"}
+            </Button>
+          </div>
+        </div>
+
 
           {/* Topic Reminder */}
           <div className="mb-4">
@@ -738,14 +884,18 @@ useEffect(() => {
                                 max-width: 680px;
                             }
 
-                            canvas {
+                            .input_video {
                                 border: 1px solid #ddd;
                                 border-radius: 8px;
                                 margin-bottom: 15px;
-                                background-color: #000;
                                 width: 100%;
                                 max-width: 500px;
                                 height: auto;
+                                transform: scaleX(-1); /* Mirror the video like a selfie */
+                            }
+
+                            canvas {
+                                display: none; /* Hide canvas since we're showing video directly */
                             }
 
                             #feedback {
@@ -760,17 +910,13 @@ useEffect(() => {
                                 box-sizing: border-box;
                                 line-height: 1.6;
                             }
-
-                            .input_video {
-                                display: none;
-                            }
                         </style>
                     </head>
                     <body>
                         <p id="status">Starting analysis...</p>
 
                         <div class="video-section">
-                            <video class="input_video" style="display: none;"></video>
+                            <video class="input_video" autoplay playsinline></video>
                             <canvas class="output_canvas" width="640px" height="480px"></canvas>
                             <div id="feedback">Real-time feedback will appear here...</div>
                         </div>
@@ -897,6 +1043,25 @@ useEffect(() => {
                                     };
                                 }
                             }
+                            window.addEventListener('message', (event) => {
+                              if (event.data.action === 'getSessionData') {
+                                const sessionDuration = (Date.now() - sessionStartTime) / 1000;
+                                const frameRate = 30; // Approximate frame rate
+                                
+                                const sessionData = {
+                                  sessionDuration: sessionDuration,
+                                  goodPostureSeconds: (mediaPipeData.goodPostureFrames / frameRate),
+                                  handGesturesSeconds: (mediaPipeData.handGesturesFrames / frameRate),
+                                  speakingSeconds: (mediaPipeData.speakingFrames / frameRate),
+                                  textChunks: textChunks
+                                };
+                                
+                                window.parent.postMessage({
+                                  type: 'sessionData',
+                                  data: sessionData
+                                }, '*');
+                              }
+                            });
 
                             const holistic = new Holistic({
                                 locateFile: (file) => \`https://cdn.jsdelivr.net/npm/@mediapipe/holistic/\${file}\`
@@ -914,10 +1079,8 @@ useEffect(() => {
                             holistic.onResults(results => {
                                 mediaPipeData.totalFrames++;
                                 
-                                canvasCtx.save();
-                                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-                                canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-                                canvasCtx.restore();
+                                // Still process the image for MediaPipe analysis but don't draw to canvas
+                                // The video element will show the camera feed directly
 
                                 let feedback = [];
                                 let goodPosture = false;
@@ -1035,6 +1198,9 @@ useEffect(() => {
           <div className="container mx-auto px-4 py-4 flex items-center justify-between">
             <h1 className="text-xl font-semibold">Session Complete</h1>
             <div className="flex items-center space-x-2">
+              <Button variant="outline" onClick={downloadReport} disabled={!finalReport}>
+                Download Report
+              </Button>
               <Button variant="outline" onClick={resetSession}>
                 <RotateCcw className="w-4 h-4 mr-2" />
                 Practice Again
@@ -1068,7 +1234,7 @@ useEffect(() => {
                 <CardContent className="p-6 text-center">
                   {analysisResult && (
                     <>
-                      <div className="text-3xl font-bold text-blue-600 mb-2">{analysisResult.overallScore}</div>
+                      <div className="text-3xl font-bold text-blue-600 mb-2">{sessionScores?.total_score||"🕒"}</div>
                       <div className="text-sm text-gray-600">Overall Score</div>
                     </>
                   )}
@@ -1077,26 +1243,32 @@ useEffect(() => {
 
               <Card>
                 <CardContent className="p-6 text-center">
-                  <div className="text-3xl font-bold text-green-600 mb-2">{analysisResult?.voiceClarity || 92}</div>
-                  <div className="text-sm text-gray-600">Voice Clarity</div>
+                  <div className="text-3xl font-bold text-green-600 mb-2">
+                    {sessionScores?.posture_score || '🕒'}
+                  </div>
+                  <div className="text-sm text-gray-600">Posture Score</div>
                 </CardContent>
               </Card>
 
               <Card>
                 <CardContent className="p-6 text-center">
-                  <div className="text-3xl font-bold text-purple-600 mb-2">{analysisResult?.bodyLanguage || 78}</div>
-                  <div className="text-sm text-gray-600">Body Language</div>
+                  <div className="text-3xl font-bold text-purple-600 mb-2">
+                    {sessionScores?.gesture_score || '🕒'}
+                  </div>
+                  <div className="text-sm text-gray-600">Gesture Score</div>
                 </CardContent>
               </Card>
 
               <Card>
                 <CardContent className="p-6 text-center">
-                  <div className="text-3xl font-bold text-orange-600 mb-2">{analysisResult?.confidence || 88}</div>
-                  <div className="text-sm text-gray-600">Confidence</div>
+                  <div className="text-3xl font-bold text-orange-600 mb-2">
+                    {sessionScores?.speaking_score || '🕒'}
+                  </div>
+                  <div className="text-sm text-gray-600">Speaking Score</div>
                 </CardContent>
               </Card>
             </div>
-
+            
             <div className="grid lg:grid-cols-2 gap-8">
               <Card>
                 <CardHeader>
@@ -1189,6 +1361,20 @@ useEffect(() => {
                 </div>
               </CardContent>
             </Card>
+            {finalReport && (
+              <Card className="mt-8">
+                <CardHeader>
+                  <CardTitle>AI-Generated Comprehensive Analysis</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <pre className="whitespace-pre-wrap text-sm text-blue-900 font-mono">
+                      {finalReport}
+                    </pre>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </div>
         </div>
       </div>

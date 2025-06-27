@@ -30,38 +30,68 @@ export default function AnalyticsPage() {
     improvementRate: 0,
   })
   const [recentSessions, setRecentSessions] = useState([])
+  const [sessionsData, setSessionsData] = useState([])
+const [skillBreakdown, setSkillBreakdown] = useState<Array<{
+    skill: string;
+    current: number;
+    previous: number;
+    trend: string;
+  }>>([])
+
   const [isLoading, setIsLoading] = useState(true)
 
-  const weeklyData = [
-    { week: "Week 1", sessions: 3, avgScore: 72 },
-    { week: "Week 2", sessions: 5, avgScore: 78 },
-    { week: "Week 3", sessions: 4, avgScore: 82 },
-    { week: "Week 4", sessions: 6, avgScore: 85 },
-  ]
-
-  const skillBreakdown = [
-    { skill: "Voice Clarity", current: 85, previous: 78, trend: "up" },
-    { skill: "Confidence", current: 82, previous: 75, trend: "up" },
-    { skill: "Body Language", current: 79, previous: 82, trend: "down" },
-    { skill: "Eye Contact", current: 88, previous: 84, trend: "up" },
-    { skill: "Grammar", current: 91, previous: 89, trend: "up" },
-  ]
 
   useEffect(() => {
     const loadAnalytics = async () => {
       try {
-        const userId = "current-user-id" // Replace with actual user ID
-
-        // Load user stats
-        const stats = await db.getUserStats(userId)
+        // Fetch data from the backend endpoint
+        const response = await fetch('http://localhost:8000/get-reports')
+        const data = await response.json()
+        
         setUserStats({
-          ...stats,
-          improvementRate: 12, // Calculate based on historical data
+          totalSessions: data.total_sessions,
+          averageScore: Math.round(data.average_total_score),
+          bestScore: data.maximum_total_score,
+          thisWeekSessions: Math.min(data.total_sessions, 7),
+          improvementRate: 12,
         })
 
-        // Load recent sessions for detailed analysis
-        const sessions = await db.getUserSessions(userId, 10)
-        setRecentSessions(sessions)
+        // Get first 4 sessions (or less if there are less than 4)
+        const recentSessionsData = data.stats.slice(0, 4).map((session: any, index: number) => ({
+          session: `Session ${index + 1}`,
+          totalScore: session.total_score,
+          date: new Date(session.timestamp * 1000).toLocaleDateString()
+        }))
+        
+        setSessionsData(recentSessionsData)
+        setRecentSessions(data.stats)
+
+        // Calculate skill breakdown from the last two sessions for trends
+        const skills = ['posture_score', 'gesture_score', 'speaking_score']
+        const skillNames = ['Posture', 'Hand Gestures', 'Speaking']
+        const skillBreakdownData = skills.map((skill, index) => {
+          const current = data[`average_${skill}`] || 0
+          
+          // Get trend from last two sessions if available
+          let trend = "up"
+          if (data.stats && data.stats.length >= 2) {
+            const latest = data.stats[0][skill] || 0
+            const previous = data.stats[1][skill] || 0
+            trend = latest >= previous ? "up" : "down"
+          }
+          
+          const previousValue = (data.stats && data.stats.length >= 2) ? data.stats[1][skill] || 0 : Math.max(0, current - 5)
+          
+          return {
+            skill: skillNames[index],
+            current: Math.round(current),
+            previous: Math.round(previousValue),
+            trend: trend
+          }
+        })
+        
+        setSkillBreakdown(skillBreakdownData)
+        
       } catch (error) {
         console.error("Error loading analytics:", error)
       } finally {
@@ -187,28 +217,33 @@ export default function AnalyticsPage() {
             <TabsContent value="progress" className="space-y-6">
               <Card>
                 <CardHeader>
-                  <CardTitle>Weekly Progress</CardTitle>
-                  <CardDescription>Your speaking performance over the last 4 weeks</CardDescription>
+                  <CardTitle>Recent Sessions Progress</CardTitle>
+                  <CardDescription>Your speaking performance in recent sessions</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
-                    {weeklyData.map((week, index) => (
+                    {sessionsData.map((session, index) => (
                       <div key={index} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
                         <div className="flex items-center space-x-4">
-                          <div className="text-sm font-medium">{week.week}</div>
-                          <Badge variant="secondary">{week.sessions} sessions</Badge>
+                          <div className="text-sm font-medium">{session.session}</div>
+                          <Badge variant="secondary">{session.date}</Badge>
                         </div>
                         <div className="flex items-center space-x-4">
                           <div className="text-right">
-                            <div className="text-sm text-gray-600">Avg Score</div>
-                            <div className="text-lg font-semibold">{week.avgScore}</div>
+                            <div className="text-sm text-gray-600">Total Score</div>
+                            <div className="text-lg font-semibold">{session.totalScore}</div>
                           </div>
                           <div className="w-24">
-                            <Progress value={week.avgScore} className="h-2" />
+                            <Progress value={session.totalScore} className="h-2" />
                           </div>
                         </div>
                       </div>
                     ))}
+                    {sessionsData.length === 0 && (
+                      <div className="text-center py-8 text-gray-600">
+                        No sessions found. Start practicing to see your progress!
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>
