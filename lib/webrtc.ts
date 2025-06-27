@@ -24,18 +24,28 @@ class WebRTCService {
 
   // ICE servers configuration
   private iceServers = {
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }],
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+      { urls: "stun:stun2.l.google.com:19302" },
+    ],
   }
 
   async initializeLocalStream(
     constraints: MediaStreamConstraints = { video: true, audio: true },
   ): Promise<MediaStream> {
     try {
+      // Check if we already have a stream
+      if (this.localStream) {
+        return this.localStream
+      }
+
       this.localStream = await navigator.mediaDevices.getUserMedia(constraints)
+      this.callState.localStream = this.localStream
       return this.localStream
     } catch (error) {
       console.error("Error accessing media devices:", error)
-      throw new Error("Could not access camera or microphone")
+      throw new Error("Could not access camera or microphone. Please check permissions.")
     }
   }
 
@@ -45,7 +55,9 @@ class WebRTCService {
     // Add local stream tracks
     if (this.localStream) {
       this.localStream.getTracks().forEach((track) => {
-        peerConnection.addTrack(track, this.localStream!)
+        if (this.localStream) {
+          peerConnection.addTrack(track, this.localStream)
+        }
       })
     }
 
@@ -119,7 +131,11 @@ class WebRTCService {
       return
     }
 
-    await peerConnection.addIceCandidate(candidate)
+    try {
+      await peerConnection.addIceCandidate(candidate)
+    } catch (error) {
+      console.error("Error adding ICE candidate:", error)
+    }
   }
 
   removePeer(peerId: string): void {

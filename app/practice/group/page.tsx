@@ -7,13 +7,26 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Users, Plus, Search, Clock, Globe, Lock, ArrowLeft } from "lucide-react"
 import Link from "next/link"
-import { db } from "@/lib/database"
+import { useRouter } from "next/navigation"
+
+interface RoomData {
+  id: string
+  name: string
+  host: string
+  participants: number
+  maxParticipants: number
+  topic: string
+  isPublic: boolean
+  timePerSpeaker: number
+  status: string
+}
 
 export default function GroupPracticePage() {
+  const router = useRouter()
   const [activeTab, setActiveTab] = useState<"join" | "create">("join")
   const [searchQuery, setSearchQuery] = useState("")
   const [roomCode, setRoomCode] = useState("")
-  const [availableRooms, setAvailableRooms] = useState([])
+  const [availableRooms, setAvailableRooms] = useState<RoomData[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
   const [formData, setFormData] = useState({
@@ -29,22 +42,43 @@ export default function GroupPracticePage() {
   useEffect(() => {
     const loadRooms = async () => {
       try {
-        const rooms = await db.getPublicRooms()
-        setAvailableRooms(
-          rooms.map((room) => ({
+        setIsLoading(true)
+
+        // Load rooms from localStorage
+        const roomsRaw = localStorage.getItem("practiceRooms")
+        let rooms = []
+
+        if (roomsRaw) {
+          try {
+            const parsed = JSON.parse(roomsRaw)
+            if (Array.isArray(parsed)) {
+              rooms = parsed.filter((room) => room && typeof room === "object" && room.id)
+            }
+          } catch (error) {
+            console.error("Error parsing rooms:", error)
+            localStorage.setItem("practiceRooms", JSON.stringify([]))
+          }
+        }
+
+        // Transform rooms for display
+        const transformedRooms = rooms
+          .filter((room) => room.is_public && room.status !== "completed")
+          .map((room) => ({
             id: room.id,
             name: room.name,
-            host: room.host.name,
-            participants: room.participants.length,
+            host: "Host", // Simplified for demo
+            participants: room.participants?.length || 0,
             maxParticipants: room.max_participants,
             topic: room.topic_category,
             isPublic: room.is_public,
             timePerSpeaker: room.time_per_speaker,
             status: room.status === "active" ? "active" : "waiting",
-          })),
-        )
+          }))
+
+        setAvailableRooms(transformedRooms)
       } catch (error) {
         console.error("Error loading rooms:", error)
+        setAvailableRooms([])
       } finally {
         setIsLoading(false)
       }
@@ -60,13 +94,24 @@ export default function GroupPracticePage() {
       room.host.toLowerCase().includes(searchQuery.toLowerCase()),
   )
 
-  const handleJoinRoom = async (roomId: number) => {
+  const handleJoinRoom = async (roomId: string) => {
     try {
-      await db.joinRoom(roomId.toString(), "current-user-id") // Replace with actual user ID
-      window.location.href = `/rooms/${roomId}`
+      // Navigate to room
+      router.push(`/rooms/${roomId}`)
     } catch (error) {
       console.error("Error joining room:", error)
+      alert("Failed to join room. Please try again.")
     }
+  }
+
+  const handleJoinWithCode = () => {
+    if (!roomCode.trim()) {
+      alert("Please enter a room code")
+      return
+    }
+
+    // Navigate to room with the provided code
+    router.push(`/rooms/${roomCode.toUpperCase()}`)
   }
 
   const handleCreateRoom = async () => {
@@ -95,15 +140,17 @@ export default function GroupPracticePage() {
         description: formData.description,
         status: "waiting",
         created_at: new Date().toISOString(),
+        participants: [],
+        speaking_order: [],
       }
 
-      // Store room data in localStorage for now (replace with actual backend later)
+      // Store room data in localStorage
       const existingRooms = JSON.parse(localStorage.getItem("practiceRooms") || "[]")
       existingRooms.push(roomData)
       localStorage.setItem("practiceRooms", JSON.stringify(existingRooms))
 
       // Redirect to room
-      window.location.href = `/rooms/${roomId}`
+      router.push(`/rooms/${roomId}`)
     } catch (error) {
       console.error("Error creating room:", error)
       alert("Failed to create room. Please try again.")
@@ -186,10 +233,13 @@ export default function GroupPracticePage() {
                       <Input
                         placeholder="Enter room code..."
                         value={roomCode}
-                        onChange={(e) => setRoomCode(e.target.value)}
+                        onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
                         className="uppercase"
+                        maxLength={6}
                       />
-                      <Button disabled={!roomCode}>Join</Button>
+                      <Button onClick={handleJoinWithCode} disabled={!roomCode.trim()}>
+                        Join
+                      </Button>
                     </div>
                   </CardContent>
                 </Card>
@@ -271,7 +321,7 @@ export default function GroupPracticePage() {
                   </div>
                 )}
 
-                {filteredRooms.length === 0 && (
+                {!isLoading && filteredRooms.length === 0 && (
                   <Card>
                     <CardContent className="p-8 text-center">
                       <Users className="w-12 h-12 text-gray-400 mx-auto mb-4" />
@@ -379,7 +429,7 @@ export default function GroupPracticePage() {
                       <li>• Automatic topic generation for each speaker</li>
                       <li>• 1-minute preparation time before speaking</li>
                       <li>• Peer feedback collection after each speech</li>
-                      <li>• Session recording and analysis (optional)</li>
+                      <li>• Individual performance reports after session</li>
                     </ul>
                   </div>
 

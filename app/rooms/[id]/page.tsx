@@ -1,11 +1,11 @@
 "use client"
 
-import { use, useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
-import { useParams } from 'next/navigation'
+import { useParams } from "next/navigation"
 import {
   Video,
   VideoOff,
@@ -21,10 +21,14 @@ import {
   Trophy,
   Star,
   Target,
+  Eye,
+  Volume2,
+  Zap,
 } from "lucide-react"
 import Link from "next/link"
 import { webrtcService } from "@/lib/webrtc"
-import { roomManager, type Room, type Participant } from "@/lib/room-manager"
+import { roomManager, type Room, type Participant, type Feedback } from "@/lib/room-manager"
+import { mediaPipeAnalyzer } from "@/lib/mediapipe-analyzer"
 
 export default function RoomPage() {
   const params = useParams()
@@ -35,6 +39,7 @@ export default function RoomPage() {
   const [cameraEnabled, setCameraEnabled] = useState(true)
   const [micEnabled, setMicEnabled] = useState(true)
   const [feedbackMessage, setFeedbackMessage] = useState("")
+  const [feedbackType, setFeedbackType] = useState<"positive" | "constructive" | "question">("constructive")
   const [timeRemaining, setTimeRemaining] = useState(0)
   const [preparationTime, setPreparationTime] = useState(0)
   const [sessionPhase, setSessionPhase] = useState<"waiting" | "preparation" | "speaking" | "feedback" | "completed">(
@@ -43,105 +48,167 @@ export default function RoomPage() {
   const [currentTopic, setCurrentTopic] = useState("")
   const [showReport, setShowReport] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [liveFeedbacks, setLiveFeedbacks] = useState<Feedback[]>([])
+  const [personalReport, setPersonalReport] = useState<any>(null)
 
   const localVideoRef = useRef<HTMLVideoElement>(null)
   const remoteVideosRef = useRef<Map<string, HTMLVideoElement>>(new Map())
+  const speakingStartTime = useRef<number>(0)
+  const mediaPipeData = useRef<any>({
+    eyeContact: 0,
+    gestureCount: 0,
+    confidenceScore: 0,
+    speakingPace: 0,
+  })
 
   useEffect(() => {
-    // Don't proceed if id is not available yet
     if (!id) return
 
     const loadRoom = () => {
       try {
+        setIsLoading(true)
+        setError(null)
+
         let rooms: Room[] = []
         const roomsRaw = localStorage.getItem("practiceRooms")
-        
+
         if (roomsRaw) {
           try {
             const parsed = JSON.parse(roomsRaw)
             if (Array.isArray(parsed)) {
-              rooms = parsed
+              rooms = parsed.filter((room) => room && typeof room === "object" && room.id)
             } else {
-              console.warn('practiceRooms is not an array:', parsed)
-              setError("Invalid room data format")
-              return
+              console.warn("practiceRooms is not an array, initializing empty array")
+              localStorage.setItem("practiceRooms", JSON.stringify([]))
             }
           } catch (parseError) {
-            console.error('Failed to parse practiceRooms:', parseError)
-            setError("Failed to load room data")
-            return
+            console.error("Failed to parse practiceRooms:", parseError)
+            localStorage.setItem("practiceRooms", JSON.stringify([]))
           }
         }
 
-        // Check if we have any rooms and a valid id
         if (rooms.length === 0) {
-          setError("No rooms found. Please create a room first.")
-          return
+          const defaultRoom: Room = {
+            id: id,
+            name: "Practice Room",
+            host_id: currentUser.id,
+            topic_category: "Everyday Conversations",
+            time_per_speaker: 2,
+            max_participants: 6,
+            total_duration: 12,
+            is_public: true,
+            description: "Default practice room",
+            status: "waiting",
+            created_at: new Date().toISOString(),
+            participants: [],
+            speaking_order: [],
+            session_feedbacks: [],
+            live_feedbacks: [],
+          }
+
+          rooms = [defaultRoom]
+          localStorage.setItem("practiceRooms", JSON.stringify(rooms))
         }
 
-        if (!id) {
-          setError("Invalid room ID")
-          return
-        }
-
-        // Find the room safely
-        const foundRoom = rooms.find((r: Room) => r && r.id === id)
+        let foundRoom = rooms.find((r: Room) => r && r.id === id)
 
         if (!foundRoom) {
-          setError(`Room with ID "${id}" not found`)
-          return
+          foundRoom = {
+            id: id,
+            name: `Room ${id}`,
+            host_id: currentUser.id,
+            topic_category: "Everyday Conversations",
+            time_per_speaker: 2,
+            max_participants: 6,
+            total_duration: 12,
+            is_public: true,
+            description: "Auto-created practice room",
+            status: "waiting",
+            created_at: new Date().toISOString(),
+            participants: [],
+            speaking_order: [],
+            session_feedbacks: [],
+            live_feedbacks: [],
+          }
+
+          rooms.push(foundRoom)
+          localStorage.setItem("practiceRooms", JSON.stringify(rooms))
         }
 
-        // Ensure participants array exists
-        if (!foundRoom.participants) {
-          foundRoom.participants = []
-        }
+        // Ensure all required arrays exist
+        if (!foundRoom.participants) foundRoom.participants = []
+        if (!foundRoom.speaking_order) foundRoom.speaking_order = []
+        if (!foundRoom.session_feedbacks) foundRoom.session_feedbacks = []
+        if (!foundRoom.live_feedbacks) foundRoom.live_feedbacks = []
 
         setRoom(foundRoom)
         setIsHost(foundRoom.host_id === currentUser.id)
-        setError(null) // Clear any previous errors
+        setLiveFeedbacks(foundRoom.live_feedbacks || [])
 
-        // Add current user as participant if not already added
         const existingParticipant = foundRoom.participants.find((p: Participant) => p && p.id === currentUser.id)
-        
+
         if (!existingParticipant) {
-          const success = roomManager.addParticipant(foundRoom.id, {
+          if (foundRoom.participants.length >= foundRoom.max_participants) {
+            setError("Room is full. Please try another room.")
+            return
+          }
+
+          const newParticipant: Participant = {
             id: currentUser.id,
             name: currentUser.name,
             is_host: foundRoom.host_id === currentUser.id,
             camera_enabled: true,
             mic_enabled: true,
-          })
-          
-          if (!success) {
-            setError("Failed to join room - room may be full")
-            return
+            joined_at: new Date().toISOString(),
+            has_spoken: false,
+            speaking_time_used: 0,
+            feedback_received: [],
+            mediapipe_analysis: {
+              eye_contact_percentage: 0,
+              gesture_count: 0,
+              confidence_score: 0,
+              speaking_pace: 0,
+              volume_consistency: 0,
+            },
           }
-          
-          // Update the room state after adding participant
-          const updatedRoom = roomManager.getRoom(foundRoom.id)
-          if (updatedRoom) {
-            setRoom(updatedRoom)
-          }
+
+          foundRoom.participants.push(newParticipant)
+
+          const updatedRooms = rooms.map((r) => (r.id === foundRoom!.id ? foundRoom : r))
+          localStorage.setItem("practiceRooms", JSON.stringify(updatedRooms))
+
+          setRoom({ ...foundRoom })
         }
 
+        roomManager.loadRoom(foundRoom)
       } catch (error) {
-        console.error('Error loading room:', error)
-        setError("Failed to load room")
+        console.error("Error loading room:", error)
+        setError("Failed to load room. Please try again.")
+      } finally {
+        setIsLoading(false)
       }
     }
 
     loadRoom()
-    
-    // Only initialize WebRTC if we don't have an error
+
+    const initWebRTC = async () => {
+      try {
+        await initializeWebRTC()
+      } catch (error) {
+        console.error("WebRTC initialization failed:", error)
+      }
+    }
+
     if (!error) {
-      initializeWebRTC()
+      initWebRTC()
     }
 
     return () => {
       webrtcService.endCall()
+      mediaPipeAnalyzer.stop()
     }
-  }, [id, currentUser.id, error]) // Add error as dependency
+  }, [id, currentUser.id])
 
   const initializeWebRTC = async () => {
     try {
@@ -150,7 +217,11 @@ export default function RoomPage() {
         localVideoRef.current.srcObject = stream
       }
 
-      // Set up WebRTC event handlers
+      // Initialize MediaPipe analyzer
+      if (localVideoRef.current) {
+        await mediaPipeAnalyzer.initialize(localVideoRef.current)
+      }
+
       webrtcService.onRemoteStreamAdded = (peerId: string, stream: MediaStream) => {
         const videoElement = remoteVideosRef.current.get(peerId)
         if (videoElement) {
@@ -159,7 +230,6 @@ export default function RoomPage() {
       }
     } catch (error) {
       console.error("Failed to initialize WebRTC:", error)
-      setError("Failed to initialize video/audio")
     }
   }
 
@@ -169,7 +239,16 @@ export default function RoomPage() {
     webrtcService.toggleVideo(newState)
 
     if (room) {
-      roomManager.updateParticipantMedia(room.id, currentUser.id, newState, micEnabled)
+      const updatedRoom = { ...room }
+      const participant = updatedRoom.participants.find((p) => p.id === currentUser.id)
+      if (participant) {
+        participant.camera_enabled = newState
+        setRoom(updatedRoom)
+
+        const rooms = JSON.parse(localStorage.getItem("practiceRooms") || "[]")
+        const updatedRooms = rooms.map((r: Room) => (r.id === room.id ? updatedRoom : r))
+        localStorage.setItem("practiceRooms", JSON.stringify(updatedRooms))
+      }
     }
   }
 
@@ -179,19 +258,48 @@ export default function RoomPage() {
     webrtcService.toggleAudio(newState)
 
     if (room) {
-      roomManager.updateParticipantMedia(room.id, currentUser.id, cameraEnabled, newState)
+      const updatedRoom = { ...room }
+      const participant = updatedRoom.participants.find((p) => p.id === currentUser.id)
+      if (participant) {
+        participant.mic_enabled = newState
+        setRoom(updatedRoom)
+
+        const rooms = JSON.parse(localStorage.getItem("practiceRooms") || "[]")
+        const updatedRooms = rooms.map((r: Room) => (r.id === room.id ? updatedRoom : r))
+        localStorage.setItem("practiceRooms", JSON.stringify(updatedRooms))
+      }
     }
   }
 
   const startSession = () => {
     if (!room || !isHost) return
 
-    roomManager.startSession(room.id)
+    const updatedRoom = { ...room }
+    updatedRoom.status = "active"
+    updatedRoom.session_start_time = new Date().toISOString()
+
+    if (updatedRoom.speaking_order.length === 0) {
+      const participantIds = updatedRoom.participants.map((p) => p.id)
+      for (let i = participantIds.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        ;[participantIds[i], participantIds[j]] = [participantIds[j], participantIds[i]]
+      }
+      updatedRoom.speaking_order = participantIds
+    }
+
+    if (updatedRoom.speaking_order.length > 0) {
+      updatedRoom.current_speaker = updatedRoom.speaking_order[0]
+    }
+
+    setRoom(updatedRoom)
     setSessionPhase("preparation")
-    setPreparationTime(60) // 1 minute preparation
+    setPreparationTime(60)
     generateTopic()
 
-    // Start preparation timer
+    const rooms = JSON.parse(localStorage.getItem("practiceRooms") || "[]")
+    const updatedRooms = rooms.map((r: Room) => (r.id === room.id ? updatedRoom : r))
+    localStorage.setItem("practiceRooms", JSON.stringify(updatedRooms))
+
     const prepTimer = setInterval(() => {
       setPreparationTime((prev) => {
         if (prev <= 1) {
@@ -211,18 +319,21 @@ export default function RoomPage() {
         "Talk about a skill you'd like to learn and your motivation",
         "Share your thoughts on the importance of friendship",
         "Discuss a memorable meal you've had and what made it special",
+        "Explain a hobby that brings you joy and why you recommend it",
       ],
       "Business & Professional": [
         "Present your idea for improving workplace productivity",
         "Discuss the future of remote work in your industry",
         "Explain how to give effective feedback to colleagues",
         "Describe the qualities of a great leader",
+        "Present a solution to a common workplace challenge",
       ],
       "Current Events & Debate": [
         "Argue for or against social media age restrictions",
         "Discuss the impact of AI on future job markets",
         "Present your views on sustainable transportation",
         "Debate the role of technology in education",
+        "Discuss the importance of digital privacy in modern society",
       ],
     }
 
@@ -235,9 +346,14 @@ export default function RoomPage() {
     if (!room) return
 
     setSessionPhase("speaking")
-    setTimeRemaining(room.time_per_speaker * 60) // Convert minutes to seconds
+    setTimeRemaining(room.time_per_speaker * 60)
+    speakingStartTime.current = Date.now()
 
-    // Start speaking timer
+    // Start MediaPipe analysis for current speaker
+    if (room.current_speaker === currentUser.id) {
+      mediaPipeAnalyzer.startAnalysis()
+    }
+
     const speakTimer = setInterval(() => {
       setTimeRemaining((prev) => {
         if (prev <= 1) {
@@ -250,10 +366,34 @@ export default function RoomPage() {
     }, 1000)
   }
 
-  const endCurrentSpeech = () => {
+  const endCurrentSpeech = async () => {
+    if (!room) return
+
+    // Stop MediaPipe analysis and get results
+    if (room.current_speaker === currentUser.id) {
+      const analysisResults = await mediaPipeAnalyzer.stopAnalysis()
+      mediaPipeData.current = analysisResults
+
+      // Update participant's MediaPipe data
+      const updatedRoom = { ...room }
+      const currentParticipant = updatedRoom.participants.find((p) => p.id === currentUser.id)
+      if (currentParticipant) {
+        currentParticipant.mediapipe_analysis = {
+          eye_contact_percentage: analysisResults.eyeContactPercentage,
+          gesture_count: analysisResults.gestureCount,
+          confidence_score: analysisResults.confidenceScore,
+          speaking_pace: analysisResults.speakingPace,
+          volume_consistency: analysisResults.volumeConsistency,
+        }
+        currentParticipant.speaking_time_used = (Date.now() - speakingStartTime.current) / 1000
+      }
+
+      setRoom(updatedRoom)
+      saveRoomToStorage(updatedRoom)
+    }
+
     setSessionPhase("feedback")
 
-    // Auto-advance to next speaker after 30 seconds of feedback time
     setTimeout(() => {
       nextSpeaker()
     }, 30000)
@@ -262,30 +402,45 @@ export default function RoomPage() {
   const nextSpeaker = () => {
     if (!room) return
 
-    const success = roomManager.nextSpeaker(room.id)
-    if (success) {
-      const updatedRoom = roomManager.getRoom(room.id)
-      if (updatedRoom?.status === "completed") {
-        setSessionPhase("completed")
-        setShowReport(true)
-      } else {
-        setSessionPhase("preparation")
-        setPreparationTime(60)
-        generateTopic()
+    const currentIndex = room.speaking_order.findIndex((id) => id === room.current_speaker)
+    if (currentIndex === -1) return
 
-        // Start next preparation timer
-        const prepTimer = setInterval(() => {
-          setPreparationTime((prev) => {
-            if (prev <= 1) {
-              clearInterval(prepTimer)
-              startSpeaking()
-              return 0
-            }
-            return prev - 1
-          })
-        }, 1000)
-      }
+    const updatedRoom = { ...room }
+
+    const currentParticipant = updatedRoom.participants.find((p) => p.id === room.current_speaker)
+    if (currentParticipant) {
+      currentParticipant.has_spoken = true
     }
+
+    if (currentIndex < updatedRoom.speaking_order.length - 1) {
+      updatedRoom.current_speaker = updatedRoom.speaking_order[currentIndex + 1]
+      setRoom(updatedRoom)
+      setSessionPhase("preparation")
+      setPreparationTime(60)
+      generateTopic()
+
+      const prepTimer = setInterval(() => {
+        setPreparationTime((prev) => {
+          if (prev <= 1) {
+            clearInterval(prepTimer)
+            startSpeaking()
+            return 0
+          }
+          return prev - 1
+        })
+      }, 1000)
+    } else {
+      updatedRoom.status = "completed"
+      updatedRoom.current_speaker = undefined
+      setRoom(updatedRoom)
+      setSessionPhase("completed")
+
+      // Generate comprehensive reports for all participants
+      generatePersonalReports(updatedRoom)
+      setShowReport(true)
+    }
+
+    saveRoomToStorage(updatedRoom)
   }
 
   const sendFeedback = () => {
@@ -293,13 +448,243 @@ export default function RoomPage() {
 
     const currentSpeaker = room.participants.find((p) => p.id === room.current_speaker)
     if (currentSpeaker && currentSpeaker.id !== currentUser.id) {
-      roomManager.addFeedback(room.id, currentSpeaker.id, {
+      const newFeedback: Feedback = {
+        id: Date.now().toString(),
         from_participant: currentUser.id,
+        from_name: currentUser.name,
+        to_participant: currentSpeaker.id,
         message: feedbackMessage,
-        type: "constructive",
-      })
+        timestamp: new Date().toISOString(),
+        type: feedbackType,
+        session_phase: sessionPhase,
+      }
+
+      const updatedRoom = { ...room }
+
+      // Add to live feedbacks for real-time display
+      updatedRoom.live_feedbacks = [...(updatedRoom.live_feedbacks || []), newFeedback]
+
+      // Add to participant's feedback received
+      const speaker = updatedRoom.participants.find((p) => p.id === currentSpeaker.id)
+      if (speaker) {
+        speaker.feedback_received.push(newFeedback)
+      }
+
+      setRoom(updatedRoom)
+      setLiveFeedbacks(updatedRoom.live_feedbacks)
       setFeedbackMessage("")
+      saveRoomToStorage(updatedRoom)
     }
+  }
+
+  const generatePersonalReports = (room: Room) => {
+    const reports: any = {}
+
+    room.participants.forEach((participant) => {
+      const feedbacksReceived = participant.feedback_received || []
+      const positiveFeedbacks = feedbacksReceived.filter((f) => f.type === "positive")
+      const constructiveFeedbacks = feedbacksReceived.filter((f) => f.type === "constructive")
+      const questions = feedbacksReceived.filter((f) => f.type === "question")
+
+      // Analyze feedback content for insights
+      const feedbackAnalysis = analyzeFeedbackContent(feedbacksReceived)
+
+      // Calculate scores based on MediaPipe data and feedback
+      const mediaPipeData = participant.mediapipe_analysis || {}
+      const overallScore = calculateOverallScore(mediaPipeData, feedbacksReceived)
+
+      const report = {
+        participant_id: participant.id,
+        participant_name: participant.name,
+        room_id: room.id,
+        session_date: new Date().toISOString(),
+        speaking_duration: participant.speaking_time_used || 0,
+
+        // Scores based on MediaPipe analysis
+        eye_contact_score: Math.round(mediaPipeData.eye_contact_percentage || 0),
+        gesture_score: Math.min(100, Math.round((mediaPipeData.gesture_count || 0) * 10)),
+        confidence_score: Math.round(mediaPipeData.confidence_score || 0),
+        pace_score: Math.round(mediaPipeData.speaking_pace || 0),
+        volume_score: Math.round(mediaPipeData.volume_consistency || 0),
+        overall_score: overallScore,
+
+        // Feedback analysis
+        total_feedbacks_received: feedbacksReceived.length,
+        positive_feedback_count: positiveFeedbacks.length,
+        constructive_feedback_count: constructiveFeedbacks.length,
+        questions_received: questions.length,
+
+        // Detailed feedback breakdown
+        feedback_summary: {
+          strengths: feedbackAnalysis.strengths,
+          improvement_areas: feedbackAnalysis.improvements,
+          common_themes: feedbackAnalysis.themes,
+        },
+
+        // Peer feedback quotes
+        peer_feedback: {
+          positive_comments: positiveFeedbacks.map((f) => ({
+            from: f.from_name,
+            comment: f.message,
+            timestamp: f.timestamp,
+          })),
+          constructive_comments: constructiveFeedbacks.map((f) => ({
+            from: f.from_name,
+            comment: f.message,
+            timestamp: f.timestamp,
+          })),
+          questions_asked: questions.map((f) => ({
+            from: f.from_name,
+            question: f.message,
+            timestamp: f.timestamp,
+          })),
+        },
+
+        // AI-generated insights
+        insights: generatePersonalInsights(mediaPipeData, feedbackAnalysis, participant),
+
+        // Recommendations
+        recommendations: generateRecommendations(mediaPipeData, feedbackAnalysis),
+
+        generated_at: new Date().toISOString(),
+      }
+
+      reports[participant.id] = report
+    })
+
+    // Save reports to localStorage
+    localStorage.setItem(`session_reports_${room.id}`, JSON.stringify(reports))
+
+    // Set personal report for current user
+    if (reports[currentUser.id]) {
+      setPersonalReport(reports[currentUser.id])
+    }
+  }
+
+  const analyzeFeedbackContent = (feedbacks: Feedback[]) => {
+    const strengths: string[] = []
+    const improvements: string[] = []
+    const themes: string[] = []
+
+    const positiveKeywords = [
+      "good",
+      "great",
+      "excellent",
+      "clear",
+      "confident",
+      "engaging",
+      "well",
+      "strong",
+      "impressive",
+    ]
+    const improvementKeywords = ["improve", "better", "more", "less", "try", "consider", "maybe", "could", "should"]
+
+    feedbacks.forEach((feedback) => {
+      const message = feedback.message.toLowerCase()
+
+      if (feedback.type === "positive" || positiveKeywords.some((keyword) => message.includes(keyword))) {
+        strengths.push(feedback.message)
+      }
+
+      if (feedback.type === "constructive" || improvementKeywords.some((keyword) => message.includes(keyword))) {
+        improvements.push(feedback.message)
+      }
+
+      // Extract common themes
+      if (message.includes("eye contact")) themes.push("Eye Contact")
+      if (message.includes("voice") || message.includes("speaking")) themes.push("Voice & Delivery")
+      if (message.includes("gesture") || message.includes("body")) themes.push("Body Language")
+      if (message.includes("pace") || message.includes("speed")) themes.push("Speaking Pace")
+      if (message.includes("content") || message.includes("topic")) themes.push("Content Quality")
+    })
+
+    return {
+      strengths: [...new Set(strengths)],
+      improvements: [...new Set(improvements)],
+      themes: [...new Set(themes)],
+    }
+  }
+
+  const calculateOverallScore = (mediaPipeData: any, feedbacks: Feedback[]) => {
+    const eyeContactScore = mediaPipeData.eye_contact_percentage || 0
+    const gestureScore = Math.min(100, (mediaPipeData.gesture_count || 0) * 10)
+    const confidenceScore = mediaPipeData.confidence_score || 0
+    const paceScore = mediaPipeData.speaking_pace || 0
+    const volumeScore = mediaPipeData.volume_consistency || 0
+
+    // Weight MediaPipe scores (70% of total)
+    const mediaPipeAverage = (eyeContactScore + gestureScore + confidenceScore + paceScore + volumeScore) / 5
+
+    // Weight peer feedback (30% of total)
+    const positiveFeedbacks = feedbacks.filter((f) => f.type === "positive").length
+    const totalFeedbacks = feedbacks.length
+    const feedbackScore = totalFeedbacks > 0 ? (positiveFeedbacks / totalFeedbacks) * 100 : 50
+
+    return Math.round(mediaPipeAverage * 0.7 + feedbackScore * 0.3)
+  }
+
+  const generatePersonalInsights = (mediaPipeData: any, feedbackAnalysis: any, participant: Participant) => {
+    const insights: string[] = []
+
+    // MediaPipe insights
+    if (mediaPipeData.eye_contact_percentage < 30) {
+      insights.push("Your eye contact could be improved. Try looking directly at the camera more often.")
+    } else if (mediaPipeData.eye_contact_percentage > 70) {
+      insights.push("Excellent eye contact! You maintained good visual connection throughout your speech.")
+    }
+
+    if (mediaPipeData.gesture_count < 3) {
+      insights.push("Consider using more hand gestures to emphasize your points and engage your audience.")
+    } else if (mediaPipeData.gesture_count > 15) {
+      insights.push("You used gestures effectively, but be mindful not to overdo it.")
+    }
+
+    // Feedback-based insights
+    if (feedbackAnalysis.themes.includes("Voice & Delivery")) {
+      insights.push("Multiple peers commented on your voice delivery - this seems to be a key area of focus.")
+    }
+
+    if (feedbackAnalysis.strengths.length > feedbackAnalysis.improvements.length) {
+      insights.push("Great job! You received more positive feedback than constructive criticism.")
+    }
+
+    return insights
+  }
+
+  const generateRecommendations = (mediaPipeData: any, feedbackAnalysis: any) => {
+    const recommendations: string[] = []
+
+    // MediaPipe-based recommendations
+    if (mediaPipeData.eye_contact_percentage < 50) {
+      recommendations.push("Practice maintaining eye contact by looking directly at your camera lens")
+    }
+
+    if (mediaPipeData.confidence_score < 60) {
+      recommendations.push("Work on your posture and facial expressions to project more confidence")
+    }
+
+    if (mediaPipeData.speaking_pace < 40) {
+      recommendations.push("Try to speak a bit faster to maintain audience engagement")
+    } else if (mediaPipeData.speaking_pace > 80) {
+      recommendations.push("Slow down your speaking pace to ensure clarity")
+    }
+
+    // Feedback-based recommendations
+    if (feedbackAnalysis.improvements.length > 0) {
+      recommendations.push("Focus on the constructive feedback you received from peers")
+    }
+
+    if (feedbackAnalysis.themes.includes("Body Language")) {
+      recommendations.push("Practice your body language and gestures in front of a mirror")
+    }
+
+    return recommendations
+  }
+
+  const saveRoomToStorage = (room: Room) => {
+    const rooms = JSON.parse(localStorage.getItem("practiceRooms") || "[]")
+    const updatedRooms = rooms.map((r: Room) => (r.id === room.id ? room : r))
+    localStorage.setItem("practiceRooms", JSON.stringify(updatedRooms))
   }
 
   const formatTime = (seconds: number) => {
@@ -320,11 +705,7 @@ export default function RoomPage() {
             <Link href="/practice/group">
               <Button className="w-full">Browse Available Rooms</Button>
             </Link>
-            <Button 
-              variant="outline" 
-              onClick={() => window.location.reload()}
-              className="w-full"
-            >
+            <Button variant="outline" onClick={() => window.location.reload()} className="w-full">
               Retry Loading
             </Button>
           </div>
@@ -333,8 +714,7 @@ export default function RoomPage() {
     )
   }
 
-  // Show loading if id is not available yet or room is not loaded
-  if (!id || !room) {
+  if (isLoading || !room) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
@@ -571,39 +951,90 @@ export default function RoomPage() {
                         {isCurrent && <Badge className="text-xs">Speaking</Badge>}
                       </div>
                     )
-                  }) || <p className="text-gray-500 text-sm">No speaking order set yet</p>}
+                  }) || <p className="text-gray-500 text-sm">Speaking order will be set when session starts</p>}
                 </div>
               </CardContent>
             </Card>
 
             {/* Live Feedback */}
-            {sessionPhase === "speaking" && room.current_speaker !== currentUser.id && (
+            {(sessionPhase === "speaking" || sessionPhase === "feedback") &&
+              room.current_speaker !== currentUser.id && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg flex items-center">
+                      <MessageSquare className="w-4 h-4 mr-2" />
+                      Send Feedback
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-3">
+                      <div className="flex space-x-2">
+                        <Button
+                          variant={feedbackType === "positive" ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setFeedbackType("positive")}
+                        >
+                          👍 Positive
+                        </Button>
+                        <Button
+                          variant={feedbackType === "constructive" ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setFeedbackType("constructive")}
+                        >
+                          💡 Improve
+                        </Button>
+                        <Button
+                          variant={feedbackType === "question" ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setFeedbackType("question")}
+                        >
+                          ❓ Question
+                        </Button>
+                      </div>
+                      <Input
+                        placeholder={`Type ${feedbackType} feedback...`}
+                        value={feedbackMessage}
+                        onChange={(e) => setFeedbackMessage(e.target.value)}
+                        onKeyPress={(e) => e.key === "Enter" && sendFeedback()}
+                      />
+                      <Button onClick={sendFeedback} disabled={!feedbackMessage.trim()} className="w-full">
+                        <Send className="w-4 h-4 mr-2" />
+                        Send {feedbackType} Feedback
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+            {/* Live Feedback Display */}
+            {sessionPhase === "speaking" && liveFeedbacks.length > 0 && (
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-lg flex items-center">
-                    <MessageSquare className="w-4 h-4 mr-2" />
-                    Send Feedback
-                  </CardTitle>
+                  <CardTitle className="text-lg">Live Feedback</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-3">
-                    <Input
-                      placeholder="Type constructive feedback..."
-                      value={feedbackMessage}
-                      onChange={(e) => setFeedbackMessage(e.target.value)}
-                      onKeyPress={(e) => e.key === "Enter" && sendFeedback()}
-                    />
-                    <Button onClick={sendFeedback} disabled={!feedbackMessage.trim()} className="w-full">
-                      <Send className="w-4 h-4 mr-2" />
-                      Send Feedback
-                    </Button>
+                  <div className="space-y-2 max-h-40 overflow-y-auto">
+                    {liveFeedbacks
+                      .filter((feedback) => feedback.to_participant === room.current_speaker)
+                      .slice(-5)
+                      .map((feedback) => (
+                        <div key={feedback.id} className="text-sm p-2 bg-gray-50 rounded">
+                          <div className="flex items-center space-x-2 mb-1">
+                            <span className="font-medium">{feedback.from_name}</span>
+                            <Badge variant="outline" className="text-xs">
+                              {feedback.type === "positive" ? "👍" : feedback.type === "constructive" ? "💡" : "❓"}
+                            </Badge>
+                          </div>
+                          <p className="text-gray-700">{feedback.message}</p>
+                        </div>
+                      ))}
                   </div>
                 </CardContent>
               </Card>
             )}
 
-            {/* Session Complete - Show Report */}
-            {showReport && (
+            {/* Personal Report */}
+            {showReport && personalReport && (
               <Card>
                 <CardHeader>
                   <CardTitle className="text-lg flex items-center">
@@ -613,42 +1044,137 @@ export default function RoomPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
+                    {/* Overall Scores */}
                     <div className="grid grid-cols-3 gap-2 text-center">
                       <div>
-                        <div className="text-2xl font-bold text-blue-600">87</div>
+                        <div className="text-2xl font-bold text-blue-600">{personalReport.overall_score}</div>
                         <div className="text-xs text-gray-600">Overall</div>
                       </div>
                       <div>
-                        <div className="text-2xl font-bold text-green-600">92</div>
-                        <div className="text-xs text-gray-600">Clarity</div>
+                        <div className="text-2xl font-bold text-green-600">{personalReport.eye_contact_score}</div>
+                        <div className="text-xs text-gray-600">Eye Contact</div>
                       </div>
                       <div>
-                        <div className="text-2xl font-bold text-purple-600">85</div>
+                        <div className="text-2xl font-bold text-purple-600">{personalReport.confidence_score}</div>
                         <div className="text-xs text-gray-600">Confidence</div>
                       </div>
                     </div>
 
-                    <div>
-                      <h4 className="font-medium text-green-600 mb-2 flex items-center">
-                        <Star className="w-4 h-4 mr-1" />
-                        Strengths
+                    {/* MediaPipe Analysis */}
+                    <div className="bg-blue-50 p-3 rounded-lg">
+                      <h4 className="font-medium text-blue-900 mb-2 flex items-center">
+                        <Zap className="w-4 h-4 mr-1" />
+                        AI Analysis
                       </h4>
-                      <ul className="text-sm space-y-1">
-                        <li>• Clear articulation</li>
-                        <li>• Good use of examples</li>
-                      </ul>
+                      <div className="grid grid-cols-2 gap-2 text-sm">
+                        <div className="flex items-center justify-between">
+                          <span className="flex items-center">
+                            <Eye className="w-3 h-3 mr-1" />
+                            Eye Contact
+                          </span>
+                          <span className="font-medium">{personalReport.eye_contact_score}%</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="flex items-center">
+                            <Volume2 className="w-3 h-3 mr-1" />
+                            Voice
+                          </span>
+                          <span className="font-medium">{personalReport.volume_score}%</span>
+                        </div>
+                      </div>
                     </div>
 
+                    {/* Peer Feedback Summary */}
                     <div>
-                      <h4 className="font-medium text-orange-600 mb-2 flex items-center">
-                        <Target className="w-4 h-4 mr-1" />
-                        Improve
-                      </h4>
-                      <ul className="text-sm space-y-1">
-                        <li>• Reduce filler words</li>
-                        <li>• Maintain eye contact</li>
-                      </ul>
+                      <h4 className="font-medium text-gray-900 mb-2">Peer Feedback</h4>
+                      <div className="grid grid-cols-3 gap-2 text-center text-sm">
+                        <div>
+                          <div className="text-lg font-bold text-green-600">
+                            {personalReport.positive_feedback_count}
+                          </div>
+                          <div className="text-xs text-gray-600">Positive</div>
+                        </div>
+                        <div>
+                          <div className="text-lg font-bold text-orange-600">
+                            {personalReport.constructive_feedback_count}
+                          </div>
+                          <div className="text-xs text-gray-600">Constructive</div>
+                        </div>
+                        <div>
+                          <div className="text-lg font-bold text-blue-600">{personalReport.questions_received}</div>
+                          <div className="text-xs text-gray-600">Questions</div>
+                        </div>
+                      </div>
                     </div>
+
+                    {/* Strengths */}
+                    {personalReport.feedback_summary.strengths.length > 0 && (
+                      <div>
+                        <h4 className="font-medium text-green-600 mb-2 flex items-center">
+                          <Star className="w-4 h-4 mr-1" />
+                          Strengths (From Peers)
+                        </h4>
+                        <ul className="text-sm space-y-1">
+                          {personalReport.feedback_summary.strengths
+                            .slice(0, 3)
+                            .map((strength: string, index: number) => (
+                              <li key={index} className="text-gray-700">
+                                • {strength}
+                              </li>
+                            ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Improvement Areas */}
+                    {personalReport.feedback_summary.improvement_areas.length > 0 && (
+                      <div>
+                        <h4 className="font-medium text-orange-600 mb-2 flex items-center">
+                          <Target className="w-4 h-4 mr-1" />
+                          Areas to Improve
+                        </h4>
+                        <ul className="text-sm space-y-1">
+                          {personalReport.feedback_summary.improvement_areas
+                            .slice(0, 3)
+                            .map((area: string, index: number) => (
+                              <li key={index} className="text-gray-700">
+                                • {area}
+                              </li>
+                            ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Key Insights */}
+                    {personalReport.insights.length > 0 && (
+                      <div>
+                        <h4 className="font-medium text-blue-600 mb-2">Key Insights</h4>
+                        <ul className="text-sm space-y-1">
+                          {personalReport.insights.slice(0, 2).map((insight: string, index: number) => (
+                            <li key={index} className="text-gray-700">
+                              • {insight}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    <Button
+                      onClick={() => {
+                        // Download detailed report
+                        const dataStr = JSON.stringify(personalReport, null, 2)
+                        const dataUri = "data:application/json;charset=utf-8," + encodeURIComponent(dataStr)
+                        const exportFileDefaultName = `speech-report-${new Date().toISOString().split("T")[0]}.json`
+                        const linkElement = document.createElement("a")
+                        linkElement.setAttribute("href", dataUri)
+                        linkElement.setAttribute("download", exportFileDefaultName)
+                        linkElement.click()
+                      }}
+                      variant="outline"
+                      className="w-full"
+                    >
+                      Download Detailed Report
+                    </Button>
                   </div>
                 </CardContent>
               </Card>

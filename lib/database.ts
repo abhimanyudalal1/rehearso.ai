@@ -22,14 +22,19 @@ const apiCall = async (endpoint: string, options: RequestInit = {}) => {
     },
   }
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, config)
+  try {
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, config)
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({ message: "Network error" }))
-    throw new Error(errorData.message || `HTTP error! status: ${response.status}`)
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ message: "Network error" }))
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`)
+    }
+
+    return response.json()
+  } catch (error) {
+    console.error(`API call failed for ${endpoint}:`, error)
+    throw error
   }
-
-  return response.json()
 }
 
 export interface User {
@@ -204,7 +209,36 @@ export class DatabaseService {
     })
   }
 
-  // Legacy methods for compatibility (these will need backend routes)
+  // Room methods (for group sessions)
+  async createRoom(roomData: any) {
+    return apiCall("/rooms", {
+      method: "POST",
+      body: JSON.stringify(roomData),
+    })
+  }
+
+  async getPublicRooms() {
+    try {
+      return await apiCall("/rooms/public")
+    } catch (error) {
+      // Fallback to localStorage for demo
+      const rooms = JSON.parse(localStorage.getItem("practiceRooms") || "[]")
+      return rooms.filter((room: any) => room.is_public && room.status !== "completed")
+    }
+  }
+
+  async joinRoom(roomId: string, userId: string) {
+    return apiCall(`/rooms/${roomId}/join`, {
+      method: "POST",
+      body: JSON.stringify({ userId }),
+    })
+  }
+
+  async getRoomParticipants(roomId: string) {
+    return apiCall(`/rooms/${roomId}/participants`)
+  }
+
+  // Legacy methods for compatibility
   async createUser(userData: Partial<User>) {
     throw new Error("Use authService.signup instead")
   }
@@ -218,29 +252,6 @@ export class DatabaseService {
       method: "PUT",
       body: JSON.stringify(updates),
     })
-  }
-
-  // Room methods (for group sessions - you'll need to implement these in backend)
-  async createRoom(roomData: any) {
-    return apiCall("/rooms", {
-      method: "POST",
-      body: JSON.stringify(roomData),
-    })
-  }
-
-  async getPublicRooms() {
-    return apiCall("/rooms/public")
-  }
-
-  async joinRoom(roomId: string, userId: string) {
-    return apiCall(`/rooms/${roomId}/join`, {
-      method: "POST",
-      body: JSON.stringify({ userId }),
-    })
-  }
-
-  async getRoomParticipants(roomId: string) {
-    return apiCall(`/rooms/${roomId}/participants`)
   }
 }
 
