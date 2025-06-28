@@ -452,6 +452,20 @@ useEffect(() => {
   }
 }, [room?.current_speaker, sessionPhase, currentUser.id])
 
+useEffect(() => {
+  // Only initialize when local video is ready and user is the current speaker
+  if (
+    localVideoRef.current &&
+    room?.current_speaker === currentUser.id &&
+    sessionPhase === "speaking"
+  ) {
+    (async () => {
+      await mediaPipeAnalyzer.initialize(localVideoRef.current)
+      mediaPipeAnalyzer.startAnalysis()
+    })()
+  }
+}, [localVideoRef.current, room?.current_speaker, sessionPhase, currentUser.id])
+
   const initializeWebRTC = async () => {
   try {
     console.log("🎥 Starting WebRTC initialization...")
@@ -657,9 +671,9 @@ useEffect(() => {
     setTimeRemaining(room.time_per_speaker * 60)
     speakingStartTime.current = Date.now()
 
-    if (room.current_speaker === currentUser.id) {
-      mediaPipeAnalyzer.startAnalysis()
-    }
+    // if (room.current_speaker === currentUser.id) {
+    //   mediaPipeAnalyzer.startAnalysis()
+    // }
 
     const speakTimer = setInterval(() => {
       setTimeRemaining((prev) => {
@@ -870,12 +884,27 @@ const debugWebRTCConnections = () => {
                       You {room.current_speaker === currentUser.id && sessionPhase === "speaking" && "(Speaking)"}
                     </div>
                     {room.current_speaker === currentUser.id && sessionPhase === "speaking" && (
-                    <div className="absolute top-2 left-2 bg-black/60 text-white px-3 py-2 rounded text-xs space-y-1 z-10">
-                      <div>👁️ Eye Contact: <span className="font-bold">{liveMediaPipe.eyeContactPercentage}%</span></div>
-                      <div>🤟 Gestures: <span className="font-bold">{liveMediaPipe.gestureCount}</span></div>
-                      <div>💪 Confidence: <span className="font-bold">{liveMediaPipe.confidenceScore}</span></div>
-                    </div>
-                  )}
+                      <div className="absolute top-2 left-2 bg-black/60 text-white px-3 py-2 rounded text-xs space-y-1 z-10">
+                        <div>
+                          👁️ Eye Contact:{" "}
+                          <span className="font-bold">
+                            {liveMediaPipe.eyeContactPercentage >= 60 ? "✅" : "❌"}
+                          </span>
+                        </div>
+                        <div>
+                          🤟 Gestures:{" "}
+                          <span className="font-bold">
+                            {liveMediaPipe.gestureCount >= 20 ? "✅" : "❌"}
+                          </span>
+                        </div>
+                        <div>
+                          💪 Confidence:{" "}
+                          <span className="font-bold">
+                            {liveMediaPipe.confidenceScore >= 60 ? "✅" : "❌"}
+                          </span>
+                        </div>
+                      </div>
+                    )}
                     <div className="absolute bottom-2 right-2 flex space-x-1">
                       <div className={`w-6 h-6 rounded-full flex items-center justify-center ${micEnabled ? "bg-green-600" : "bg-red-600"}`}>
                         {micEnabled ? <Mic className="w-3 h-3 text-white" /> : <MicOff className="w-3 h-3 text-white" />}

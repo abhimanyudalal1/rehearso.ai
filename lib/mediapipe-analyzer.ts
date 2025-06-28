@@ -360,14 +360,25 @@ class MediaPipeAnalyzer {
       }
     }
 
-    const eyeContactPercentage = (this.analysisData.eyeContactFrames / this.analysisData.totalFrames) * 100
-    const averageConfidence = this.analysisData.confidenceSum / this.analysisData.totalFrames
+    // Eye contact as percentage of frames
+  const eyeContactPercentage = (this.analysisData.eyeContactFrames / this.analysisData.totalFrames) * 100
 
-    return {
-      eyeContactPercentage: Math.round(eyeContactPercentage),
-      gestureCount: this.analysisData.gestureCount,
-      confidenceScore: Math.round(averageConfidence)
-    }
+  // Gestures as percentage of frames (not just a count)
+  const gesturePercentage = (this.analysisData.handGesturesFrames / this.analysisData.totalFrames) * 100
+
+  // Dynamic confidence: average of posture, gestures, speaking, eye contact per frame
+  const postureScore = (this.analysisData.goodPostureFrames / this.analysisData.totalFrames) * 100
+  const speakingScore = (this.analysisData.speakingFrames / this.analysisData.totalFrames) * 100
+
+  // Confidence: average of all four metrics
+  const confidenceScore = Math.round(
+    (postureScore + gesturePercentage + speakingScore + eyeContactPercentage) / 4
+  )
+     return {
+    eyeContactPercentage: Math.round(eyeContactPercentage),
+    gestureCount: Math.round(gesturePercentage), // Now a percentage
+    confidenceScore: confidenceScore
+  }
   }
 }
 
