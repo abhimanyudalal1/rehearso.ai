@@ -210,7 +210,7 @@ export default function Dashboard() {
 
         {/* **new add on** */}
 
-        <Link href="/analytics/detailed">
+        <Link href="/analytics/detailed" className="block mb-8">
         <Card className="hover:shadow-lg transition-shadow cursor-pointer border-2 hover:border-indigo-200">
           <CardHeader className="pb-3">
             <div className="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center mb-2">
