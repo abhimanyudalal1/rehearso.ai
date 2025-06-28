@@ -85,11 +85,14 @@ class WebRTCService {
     
     // Handle remote stream
     peerConnection.ontrack = (event) => {
-      const [remoteStream] = event.streams
-      console.log("🎥 Remote stream received from peer:", peerId)
-      this.callState.remoteStreams.set(peerId, remoteStream)
-      this.onRemoteStreamAdded?.(peerId, remoteStream)
+    console.log("🎥 ontrack fired for", peerId, event.streams)
+    if (event.streams && event.streams[0]) {
+      this.callState.remoteStreams.set(peerId, event.streams[0])
+      if (this.onRemoteStreamAdded) {
+        this.onRemoteStreamAdded(peerId, event.streams[0])
+      }
     }
+  }
 
     // Handle ICE candidates
     peerConnection.onicecandidate = (event) => {

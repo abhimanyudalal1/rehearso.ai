@@ -34,7 +34,19 @@ export default function RoomPage() {
   const params = useParams()
   const id = params?.id as string
   const [room, setRoom] = useState<Room | null>(null)
-  const [currentUser] = useState({ id: "current-user-id", name: "You" })
+  function generateRandomId() {
+    return "user-" + Math.random().toString(36).substr(2, 9)
+  }
+
+  const [currentUser] = useState(() => {
+    // Persist per tab for refresh, but unique per tab
+    let id = sessionStorage.getItem("user_id")
+    if (!id) {
+      id = generateRandomId()
+      sessionStorage.setItem("user_id", id)
+    }
+    return { id, name: "You" }
+  })  
   const [isHost, setIsHost] = useState(false)
   const [cameraEnabled, setCameraEnabled] = useState(true)
   const [micEnabled, setMicEnabled] = useState(true)
@@ -150,6 +162,7 @@ export default function RoomPage() {
         // Send user information immediately
         ws.send(JSON.stringify({
           type: "set_participant_name",
+          user_id: currentUser.id,
           user_name: currentUser.name
         }))
       }
@@ -162,19 +175,38 @@ export default function RoomPage() {
           console.log("📨 Received:", message.type)
           
           switch (message.type) {
-            case "room_state":
-              console.log("📊 Room state received, participants:", message.room.participants?.length)
-              console.log("🆔 Received user_id from backend:", message.user_id)
-              setRoom(message.room)
-              
-              // ✅ CRITICAL: Set the user ID for WebRTC service
-              if (message.user_id) {
-                console.log("🆔 Setting currentUserId and WebRTC user ID to:", message.user_id)
-                setCurrentUserId(message.user_id)
-                webrtcService.setCurrentUserId(message.user_id)
-              } else {
-                console.error("❌ No user_id received from backend!")
-              }
+          case "room_state":
+  console.log("📊 Room state received, participants:", message.room.participants?.length)
+  console.log("🆔 Received user_id from backend:", message.user_id)
+  setRoom(message.room)
+
+  // ✅ CRITICAL: Set the user ID for WebRTC service
+  if (message.user_id) {
+    console.log("🆔 Setting currentUserId and WebRTC user ID to:", message.user_id)
+    setCurrentUserId(message.user_id)
+    webrtcService.setCurrentUserId(message.user_id)
+
+    // Use message.user_id directly here!
+    if (message.room.participants && message.room.participants.length > 1 && message.user_id) {
+      const otherParticipants = message.room.participants.filter(
+        (p: any) => (p.user_id || p.id) !== message.user_id
+      )
+      otherParticipants.forEach(async (participant: any, index: number) => {
+        const participantId = participant.user_id || participant.id
+        setTimeout(async () => {
+          try {
+            console.log("🔗 [NEW JOINER] Creating offer for existing participant:", participantId)
+            await webrtcService.createOffer(participantId)
+          } catch (error) {
+            console.error("Failed to create offer for existing participant (new joiner):", error)
+          }
+        }, 2000 + (index * 1000))
+      })
+    }
+  } else {
+    console.error("❌ No user_id received from backend!")
+  }
+  // ...rest of your code...
               
               
               const currentParticipant = message.room.participants?.find(
@@ -193,24 +225,20 @@ export default function RoomPage() {
                     
                     // IMPORTANT: Wait for video elements to render before connecting
                     setTimeout(() => {
-                      if (message.room.participants && message.room.participants.length > 1) {
+                      if (message.room.participants && message.room.participants.length > 1 && message.user_id) {
                         const otherParticipants = message.room.participants.filter(
                           (p: any) => (p.user_id || p.id) !== message.user_id
                         )
-                        
-                        console.log("🔗 Establishing connections with existing participants:", otherParticipants.length)
-                        
                         otherParticipants.forEach(async (participant: any, index: number) => {
                           const participantId = participant.user_id || participant.id
-                          console.log("🔗 Connecting to existing participant:", participantId)
-                          
                           setTimeout(async () => {
                             try {
+                              console.log("🔗 [NEW JOINER] Creating offer for existing participant:", participantId)
                               await webrtcService.createOffer(participantId)
                             } catch (error) {
-                              console.error("Failed to create offer for existing participant:", error)
+                              console.error("Failed to create offer for existing participant (new joiner):", error)
                             }
-                          }, 3000 + (index * 1000)) // Staggered with longer delays
+                          }, 2000 + (index * 1000))
                         })
                       }
                     }, 2000) // Wait for video elements to be created
@@ -266,16 +294,12 @@ export default function RoomPage() {
               }
               break
               
-            case "send_feedback":
-              setLiveFeedbacks(prev => [...prev, message.feedback])
-              break
-              
             case "webrtc_offer":
   console.log("📞 Received WebRTC offer from:", message.from, "to:", message.to)
   console.log("📞 Current user ID:", currentUserId)
   console.log("📞 Should process?", !message.to || message.to === currentUserId)
-  
-  if (!message.to || message.to === currentUserId) {
+
+  if (!message.to || message.to === currentUserId || message.to === currentUser.id) {
     console.log("✅ Processing WebRTC offer from:", message.from)
     try {
       await webrtcService.handleRemoteOffer(message.from, message.offer)
@@ -291,7 +315,7 @@ export default function RoomPage() {
             case "webrtc_answer":
               console.log("📞 Received WebRTC answer from:", message.from, "to:", message.to, "currentUserId:", currentUserId)
               // ✅ FIXED: Use currentUserId instead of message.user_id
-              if (!message.to || message.to === currentUserId) {
+              if (!message.to || message.to === currentUserId || message.to === currentUser.id) {
                 console.log("✅ Processing WebRTC answer from:", message.from)
                 webrtcService.handleAnswer(message.from, message.answer)
               } else {
@@ -302,7 +326,7 @@ export default function RoomPage() {
             case "webrtc_ice_candidate":
               console.log("🧊 Received ICE candidate from:", message.from, "to:", message.to, "currentUserId:", currentUserId)
               // ✅ FIXED: Use currentUserId instead of message.user_id
-              if (!message.to || message.to === currentUserId) {
+              if (!message.to || message.to === currentUserId || message.to === currentUser.id) {
                 console.log("✅ Processing ICE candidate from:", message.from)
                 webrtcService.handleIceCandidate(message.from, message.candidate)
               } else {
@@ -802,86 +826,79 @@ const debugWebRTCConnections = () => {
                     </div>
                   </div>
 
-                  {room.participants && room.participants.length > 0 && (() => {
-                    const currentUserParticipant = room.participants.find(p => 
-                      p && (p.user_name === currentUser.name || p.name === currentUser.name)
-                    )
-                    const currentUserParticipantId = currentUserParticipant?.user_id || currentUserParticipant?.id
-                    
-                    return room.participants
-                      .filter((p) => {
-                        if (!p || !(p.user_id || p.id)) return false
-                        const participantId = p.user_id || p.id
-                        return participantId !== currentUserParticipantId
-                      })
-                      .slice(0, 7)
-                      .map((participant) => {
-                        const participantId = participant.user_id || participant.id
-                        const participantName = participant.user_name || participant.name || 'Participant'
-                        
-                        return (
-                          <div
-                            key={`remote-${participantId}`}
-                            className="relative aspect-video bg-gray-800 rounded-lg overflow-hidden"
-                          >
-                            <video
-                              ref={(el) => {
-                                if (el && participantId) {
-                                  console.log(`📹 Setting video ref for participant: ${participantId}`)
-                                  
-                                  // Set data attribute for DOM lookup
-                                  el.setAttribute('data-peer-id', participantId)
-                                  
-                                  // Store in ref
-                                  remoteVideosRef.current.set(participantId, el)
-                                  
-                                  // Check if there's already a stream for this participant
-                                  const existingStream = webrtcService.getCallState().remoteStreams.get(participantId)
-                                  if (existingStream) {
-                                    console.log("🔄 Assigning existing stream to new video element:", participantId)
-                                    el.srcObject = existingStream
-                                    el.play().catch(error => console.error("❌ Error playing existing stream:", error))
-                                  } else {
-                                    // Set placeholder to mark this element as available
-                                    console.log("📺 Video element ready for peer:", participantId)
-                                  }
-                                }
-                              }}
-                              autoPlay
-                              playsInline
-                              className="w-full h-full object-cover"
-                              data-peer-id={participantId} // Add this for DOM lookup
-                            />
-                            <div className="absolute bottom-2 left-2 bg-black/50 text-white px-2 py-1 rounded text-sm">
-                              {participantName}{" "}
-                              {room.current_speaker === participantId && sessionPhase === "speaking" && "(Speaking)"}
-                              {participant.is_host && " (Host)"}
-                            </div>
-                            <div className="absolute bottom-2 right-2 flex space-x-1">
-                              <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
-                                participant.mic_enabled !== false ? "bg-green-600" : "bg-red-600"
-                              }`}>
-                                {participant.mic_enabled !== false ? (
-                                  <Mic className="w-3 h-3 text-white" />
-                                ) : (
-                                  <MicOff className="w-3 h-3 text-white" />
-                                )}
-                              </div>
-                              <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
-                                participant.camera_enabled !== false ? "bg-green-600" : "bg-red-600"
-                              }`}>
-                                {participant.camera_enabled !== false ? (
-                                  <Video className="w-3 h-3 text-white" />
-                                ) : (
-                                  <VideoOff className="w-3 h-3 text-white" />
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        )
-                      })
-                  })()}
-                </div>
+{room.participants && room.participants.length > 0 && (() => {
+  // Use currentUserId from state, which is set from the backend
+  return room.participants
+    .filter((p) => {
+      if (!p || !(p.user_id || p.id)) return false
+      const participantId = p.user_id || p.id
+      // Only filter out the participant whose ID matches currentUserId
+      return participantId !== currentUserId
+    })
+    .slice(0, 7)
+    .map((participant) => {
+      const participantId = participant.user_id || participant.id
+      const participantName = participant.user_name || participant.name || 'Participant'
+      return (
+        <div
+          key={`remote-${participantId}`}
+          className="relative aspect-video bg-gray-800 rounded-lg overflow-hidden"
+        >
+          <video
+            ref={(el) => {
+              if (el && participantId) {
+                el.setAttribute('data-peer-id', participantId)
+                el.muted = true // <-- Add this to allow autoplay
+                remoteVideosRef.current.set(participantId, el)
+                const existingStream = webrtcService.getCallState().remoteStreams.get(participantId)
+                if (existingStream) {
+                  el.srcObject = existingStream
+                  el.play().catch(error => {
+                    console.error("❌ Error playing existing stream:", error)
+                  })
+                } else {
+                  // Add debug log if no stream
+                  console.warn("⚠️ No remote stream for", participantId)
+                }
+              }
+            }}
+            autoPlay
+            playsInline
+            className="w-full h-full object-cover"
+            data-peer-id={participantId}
+          />
+          {/* Show a message if no stream */}
+          
+          <div className="absolute bottom-2 left-2 bg-black/50 text-white px-2 py-1 rounded text-sm">
+            {participantName}{" "}
+            {room.current_speaker === participantId && sessionPhase === "speaking" && "(Speaking)"}
+            {participant.is_host && " (Host)"}
+          </div>
+          <div className="absolute bottom-2 right-2 flex space-x-1">
+            <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
+              participant.mic_enabled !== false ? "bg-green-600" : "bg-red-600"
+            }`}>
+              {participant.mic_enabled !== false ? (
+                <Mic className="w-3 h-3 text-white" />
+              ) : (
+                <MicOff className="w-3 h-3 text-white" />
+              )}
+            </div>
+            <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
+              participant.camera_enabled !== false ? "bg-green-600" : "bg-red-600"
+            }`}>
+              {participant.camera_enabled !== false ? (
+                <Video className="w-3 h-3 text-white" />
+              ) : (
+                <VideoOff className="w-3 h-3 text-white" />
+              )}
+            </div>
+          </div>
+        </div>
+      )
+    })
+})()}
+                                  </div>
 
                 <div className="flex justify-center space-x-4">
                   <Button onClick={toggleMic} variant={micEnabled ? "default" : "destructive"} size="lg">
