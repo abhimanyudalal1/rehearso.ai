@@ -282,7 +282,24 @@ export default function RoomPage() {
             case "session_started":
               setRoom(message.room)
               setSessionPhase("preparation")
+              setPreparationTime(message.room.preparation_time || 60) // <-- Set prep time (default 60s if not provided)
               generateTopic()
+              // Start countdown for preparation phase
+              {
+                let prep = message.room.preparation_time || 60
+                setPreparationTime(prep)
+                const prepInterval = setInterval(() => {
+                  setPreparationTime(prev => {
+                    if (prev <= 1) {
+                      clearInterval(prepInterval)
+                      setSessionPhase("speaking")
+                      setTimeRemaining(message.room.time_per_speaker * 60)
+                      return 0
+                    }
+                    return prev - 1
+                  })
+                }, 1000)
+              }
               break
               
             case "speaker_changed":
@@ -291,6 +308,8 @@ export default function RoomPage() {
                 setSessionPhase("completed")
                 getPersonalReport()
                 setShowReport(true)
+              }else if (message.room.current_speaker === currentUser.id) {
+                startSpeaking() // <-- Start timer for the current speaker
               }
               break
               
@@ -851,14 +870,12 @@ const debugWebRTCConnections = () => {
                 el.muted = true // <-- Add this to allow autoplay
                 remoteVideosRef.current.set(participantId, el)
                 const existingStream = webrtcService.getCallState().remoteStreams.get(participantId)
-                if (existingStream) {
+                // Only assign if not already set
+                if (existingStream && el.srcObject !== existingStream) {
                   el.srcObject = existingStream
                   el.play().catch(error => {
                     console.error("❌ Error playing existing stream:", error)
                   })
-                } else {
-                  // Add debug log if no stream
-                  console.warn("⚠️ No remote stream for", participantId)
                 }
               }
             }}

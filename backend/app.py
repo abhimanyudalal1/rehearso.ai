@@ -380,7 +380,7 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
                 "type": "room_state",
                 "room": room,
                 "user_id": user_id
-                
+
             }))
         # Message handling loop
         while True:
