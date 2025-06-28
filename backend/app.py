@@ -310,49 +310,55 @@ active_connections: Dict[str, Dict[str, WebSocket]] = {}
 async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
     await websocket.accept()
     print(f"WebSocket connection accepted for room: {room_id}")
-    
+
     # Initialize room connections
     if room_id not in room_connections:
         room_connections[room_id] = []
-    
     if room_id not in active_connections:
         active_connections[room_id] = {}
-    
-    # Generate user ID for this connection
-    user_id = str(uuid.uuid4())
+
+    # --- Wait for first message to get user_id from client ---
+    try:
+        first_data = await websocket.receive_text()
+        first_message = json.loads(first_data)
+        if first_message.get("type") == "set_participant_name" and "user_id" in first_message:
+            user_id = first_message["user_id"]
+            user_name = first_message.get("user_name", f"User_{user_id[:6]}")
+        else:
+            user_id = str(uuid.uuid4())
+            user_name = f"User_{user_id[:6]}"
+    except Exception as e:
+        print("Failed to get user_id from client, generating random:", e)
+        user_id = str(uuid.uuid4())
+        user_name = f"User_{user_id[:6]}"
+
     websocket.user_id = user_id
-    
-    # CHECK: Prevent too many connections from same session
+
     client_host = websocket.client.host if websocket.client else "unknown"
     connection_key = f"{client_host}_{user_id[:8]}"
-    
-    if len(active_connections[room_id]) >= 10:  # Room limit
+
+    if len(active_connections[room_id]) >= 10:
         await websocket.close(code=1008, reason="Too many connections")
         return
-    
+
     # Store this connection
     active_connections[room_id][connection_key] = websocket
     room_connections[room_id].append(websocket)
-    
+
     participant_added = False
-    
+
     try:
         # ADD PARTICIPANT ONLY ONCE
         if room_id in active_rooms:
             room = active_rooms[room_id]
-            
-            # CHECK: Don't add if we already have too many participants
             if len(room["participants"]) < room["max_participants"]:
-                # DOUBLE CHECK: Make sure this user_id doesn't already exist
                 existing_participant = next((p for p in room["participants"] if p.get("user_id") == user_id), None)
-                
                 if not existing_participant:
-                    # Add new participant
                     participant = {
                         "id": user_id,
                         "user_id": user_id,
-                        "user_name": f"User_{user_id[:6]}",
-                        "name": f"User_{user_id[:6]}",
+                        "user_name": user_name,
+                        "name": user_name,
                         "joined_at": "2025-01-01T00:00:00Z",
                         "camera_enabled": True,
                         "mic_enabled": True,
@@ -361,10 +367,7 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
                     }
                     room["participants"].append(participant)
                     participant_added = True
-                    
                     print(f"✅ Added participant {user_id} to room {room_id}. Total: {len(room['participants'])}")
-                    
-                    # Broadcast to others (not to this connection to avoid loops)
                     await broadcast_to_room(room_id, {
                         "type": "participant_joined",
                         "room": room,
@@ -372,21 +375,19 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
                     }, exclude=websocket)
                 else:
                     print(f"🚫 Participant {user_id} already exists in room {room_id}")
-            
             # Send initial room state to this connection only
             await websocket.send_text(json.dumps({
                 "type": "room_state",
                 "room": room,
                 "user_id": user_id
+                
             }))
-        
         # Message handling loop
         while True:
             try:
                 data = await websocket.receive_text()
                 message = json.loads(data)
                 print(f"📨 Message from {user_id}: {message.get('type', 'unknown')}")
-                
                 # Handle different message types
                 if message["type"] == "set_participant_name":
                     if room_id in active_rooms:
@@ -416,7 +417,7 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
                     print(f"📞 WebRTC answer from {user_id} to {message.get('to', 'broadcast')}")
                     print(f"   Forwarding to room {room_id}")
                     await broadcast_to_room(room_id, {
-                        
+            
                         "type": "webrtc_answer",
                         "from": user_id,  # ✅ This should be the actual UUID
                         "to": message.get("to"),
