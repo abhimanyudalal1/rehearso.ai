@@ -214,20 +214,38 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         await manager.disconnect(websocket)
 
+# ADD: Enhanced room data structure and management
 active_rooms: Dict[str, dict] = {}
 room_connections: Dict[str, List[WebSocket]] = {}
 
 async def broadcast_to_room(room_id: str, message: dict, exclude=None):
     """Broadcast message to all participants in a room"""
-    if room_id in room_connections:
-        for ws in room_connections[room_id]:
-            if ws != exclude:
-                try:
+    if room_id not in room_connections:
+        return
+    
+    dead_connections = []
+    for ws in room_connections[room_id][:]:  # Create a copy to iterate safely
+        if ws != exclude:
+            try:
+                # Check if WebSocket is still open before sending
+                if ws.client_state.CONNECTED:
                     await ws.send_text(json.dumps(message))
-                except:
-                    # Remove dead connections
-                    room_connections[room_id].remove(ws)
+            except Exception as e:
+                print(f"Removing dead WebSocket connection: {e}")
+                dead_connections.append(ws)
+    
+    # Remove dead connections
+    for dead_ws in dead_connections:
+        try:
+            room_connections[room_id].remove(dead_ws)
+        except ValueError:
+            pass  # Connection already removed
+    
+    # Clean up empty room connections
+    if not room_connections[room_id]:
+        del room_connections[room_id]
 
+# ADD: Room management endpoints
 @app.post("/api/rooms")
 async def create_room(room_data: RoomData):
     """Create a new room"""
@@ -249,7 +267,7 @@ async def create_room(room_data: RoomData):
         "speaking_order": [],
         "current_speaker": None,
         "feedbacks": [],
-        "created_at": "2025-01-01T00:00:00Z"  # Use actual timestamp
+        "created_at": "2025-01-01T00:00:00Z"  # Use actual timestamp if needed
     }
     
     return {"room_id": room_id}
@@ -265,6 +283,13 @@ async def get_rooms():
     
     return {"rooms": public_rooms}
 
+@app.get("/api/rooms/{room_id}")
+async def get_room(room_id: str):
+    """Get details of a specific room"""
+    if room_id in active_rooms:
+        return {"room": active_rooms[room_id]}
+    return JSONResponse({"error": "Room not found"}, status_code=404)
+
 @app.post("/api/rooms/{room_id}/join")
 async def join_room(room_id: str, user_data: UserJoinData):
     """Join a specific room"""
@@ -277,133 +302,238 @@ async def join_room(room_id: str, user_data: UserJoinData):
     if len(room["participants"]) >= room["max_participants"]:
         return JSONResponse({"error": "Room is full"}, status_code=400)
     
-    # Add participant
-    participant = {
-        "user_id": user_data.user_id,
-        "user_name": user_data.user_name,
-        "joined_at": "2025-01-01T00:00:00Z"
-    }
-    
-    room["participants"].append(participant)
-    
     return {"status": "joined", "room": room}
 
-# Enhanced WebSocket for room communication and WebRTC signaling
+active_connections: Dict[str, Dict[str, WebSocket]] = {}
+
 @app.websocket("/ws/room/{room_id}")
 async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
     await websocket.accept()
+    print(f"WebSocket connection accepted for room: {room_id}")
     
     # Initialize room connections
     if room_id not in room_connections:
         room_connections[room_id] = []
-    room_connections[room_id].append(websocket)
+    
+    if room_id not in active_connections:
+        active_connections[room_id] = {}
     
     # Generate user ID for this connection
     user_id = str(uuid.uuid4())
+    websocket.user_id = user_id
+    
+    # CHECK: Prevent too many connections from same session
+    client_host = websocket.client.host if websocket.client else "unknown"
+    connection_key = f"{client_host}_{user_id[:8]}"
+    
+    if len(active_connections[room_id]) >= 10:  # Room limit
+        await websocket.close(code=1008, reason="Too many connections")
+        return
+    
+    # Store this connection
+    active_connections[room_id][connection_key] = websocket
+    room_connections[room_id].append(websocket)
+    
+    participant_added = False
     
     try:
-        # Send initial room state
+        # ADD PARTICIPANT ONLY ONCE
         if room_id in active_rooms:
+            room = active_rooms[room_id]
+            
+            # CHECK: Don't add if we already have too many participants
+            if len(room["participants"]) < room["max_participants"]:
+                # DOUBLE CHECK: Make sure this user_id doesn't already exist
+                existing_participant = next((p for p in room["participants"] if p.get("user_id") == user_id), None)
+                
+                if not existing_participant:
+                    # Add new participant
+                    participant = {
+                        "id": user_id,
+                        "user_id": user_id,
+                        "user_name": f"User_{user_id[:6]}",
+                        "name": f"User_{user_id[:6]}",
+                        "joined_at": "2025-01-01T00:00:00Z",
+                        "camera_enabled": True,
+                        "mic_enabled": True,
+                        "is_host": len(room["participants"]) == 0,
+                        "has_spoken": False
+                    }
+                    room["participants"].append(participant)
+                    participant_added = True
+                    
+                    print(f"✅ Added participant {user_id} to room {room_id}. Total: {len(room['participants'])}")
+                    
+                    # Broadcast to others (not to this connection to avoid loops)
+                    await broadcast_to_room(room_id, {
+                        "type": "participant_joined",
+                        "room": room,
+                        "new_participant": participant
+                    }, exclude=websocket)
+                else:
+                    print(f"🚫 Participant {user_id} already exists in room {room_id}")
+            
+            # Send initial room state to this connection only
             await websocket.send_text(json.dumps({
                 "type": "room_state",
-                "room": active_rooms[room_id],
+                "room": room,
                 "user_id": user_id
             }))
         
+        # Message handling loop
         while True:
-            data = await websocket.receive_text()
-            message = json.loads(data)
-            
-            # Handle different message types
-            if message["type"] == "webrtc_offer":
-                # Forward WebRTC signaling
-                await broadcast_to_room(room_id, message, exclude=websocket)
+            try:
+                data = await websocket.receive_text()
+                message = json.loads(data)
+                print(f"📨 Message from {user_id}: {message.get('type', 'unknown')}")
                 
-            elif message["type"] == "webrtc_answer":
-                # Forward WebRTC signaling
-                await broadcast_to_room(room_id, message, exclude=websocket)
+                # Handle different message types
+                if message["type"] == "set_participant_name":
+                    if room_id in active_rooms:
+                        room = active_rooms[room_id]
+                        for participant in room["participants"]:
+                            if participant["user_id"] == user_id:
+                                participant["user_name"] = message["user_name"]
+                                participant["name"] = message["user_name"]
+                                break
+                        
+                        await broadcast_to_room(room_id, {
+                            "type": "participant_updated",
+                            "room": room
+                        })
                 
-            elif message["type"] == "webrtc_ice_candidate":
-                # Forward WebRTC signaling
-                await broadcast_to_room(room_id, message, exclude=websocket)
-                
-            elif message["type"] == "start_session":
-                # Host starts the session
-                if room_id in active_rooms:
-                    room = active_rooms[room_id]
-                    room["status"] = "active"
+                elif message["type"] == "webrtc_offer":
+                    print(f"🔗 WebRTC offer from {user_id} to {message.get('to', 'broadcast')}")
+                    print(f"   Forwarding to room {room_id}")
+                    await broadcast_to_room(room_id, {
+                        "type": "webrtc_offer",
+                        "from": user_id,  # ✅ This should be the actual UUID
+                        "to": message.get("to"),
+                        "offer": message["offer"]
+                    }, exclude=websocket)
                     
-                    # Randomize speaking order
-                    participants = room["participants"]
-                    import random
-                    random.shuffle(participants)
-                    room["speaking_order"] = [p["user_id"] for p in participants]
-                    room["current_speaker"] = room["speaking_order"][0] if participants else None
+                elif message["type"] == "webrtc_answer":
+                    print(f"📞 WebRTC answer from {user_id} to {message.get('to', 'broadcast')}")
+                    print(f"   Forwarding to room {room_id}")
+                    await broadcast_to_room(room_id, {
+                        
+                        "type": "webrtc_answer",
+                        "from": user_id,  # ✅ This should be the actual UUID
+                        "to": message.get("to"),
+                        "answer": message["answer"]
+                    }, exclude=websocket)
                     
-                await broadcast_to_room(room_id, {
-                    "type": "session_started",
-                    "room": active_rooms[room_id]
-                })
-                
-            elif message["type"] == "send_feedback":
-                # Store and broadcast feedback
-                if room_id in active_rooms:
-                    if "feedbacks" not in active_rooms[room_id]:
-                        active_rooms[room_id]["feedbacks"] = []
-                    active_rooms[room_id]["feedbacks"].append(message["feedback"])
-                
-                await broadcast_to_room(room_id, message, exclude=websocket)
-                
-            elif message["type"] == "next_speaker":
-                # Move to next speaker
-                if room_id in active_rooms:
-                    room = active_rooms[room_id]
-                    if room["current_speaker"] in room["speaking_order"]:
-                        current_index = room["speaking_order"].index(room["current_speaker"])
-                        if current_index < len(room["speaking_order"]) - 1:
-                            room["current_speaker"] = room["speaking_order"][current_index + 1]
-                        else:
-                            room["status"] = "completed"
-                            room["current_speaker"] = None
-                
-                await broadcast_to_room(room_id, {
-                    "type": "speaker_changed",
-                    "room": active_rooms[room_id]
-                })
-                
-            else:
-                # Broadcast other messages
-                await broadcast_to_room(room_id, message, exclude=websocket)
+                elif message["type"] == "webrtc_ice_candidate":
+                    print(f"🧊 ICE candidate from {user_id} to {message.get('to', 'broadcast')}")
+                    print(f"   Forwarding to room {room_id}")
+                    await broadcast_to_room(room_id, {
+                        "type": "webrtc_ice_candidate",
+                        "from": user_id,  # ✅ This should be the actual UUID
+                        "to": message.get("to"),
+                        "candidate": message["candidate"]
+                    }, exclude=websocket)
+                elif message["type"] == "start_session":
+                    if room_id in active_rooms:
+                        room = active_rooms[room_id]
+                        room["status"] = "active"
+                        
+                        # Randomize speaking order
+                        participants = room["participants"]
+                        import random
+                        random.shuffle(participants)
+                        room["speaking_order"] = [p["user_id"] for p in participants]
+                        room["current_speaker"] = room["speaking_order"][0] if participants else None
+                        
+                    await broadcast_to_room(room_id, {
+                        "type": "session_started",
+                        "room": active_rooms[room_id]
+                    })
+                    
+                elif message["type"] == "send_feedback":
+                    if room_id in active_rooms:
+                        if "feedbacks" not in active_rooms[room_id]:
+                            active_rooms[room_id]["feedbacks"] = []
+                        active_rooms[room_id]["feedbacks"].append(message["feedback"])
+                    
+                    await broadcast_to_room(room_id, message, exclude=websocket)
+                    
+                elif message["type"] == "toggle_camera":
+                    if room_id in active_rooms:
+                        room = active_rooms[room_id]
+                        for participant in room["participants"]:
+                            if participant["user_id"] == message["participant_id"]:
+                                participant["camera_enabled"] = message["camera_enabled"]
+                                break
+                    
+                    await broadcast_to_room(room_id, {
+                        "type": "participant_updated",
+                        "room": active_rooms[room_id]
+                    })
+                    
+                elif message["type"] == "toggle_mic":
+                    if room_id in active_rooms:
+                        room = active_rooms[room_id]
+                        for participant in room["participants"]:
+                            if participant["user_id"] == message["participant_id"]:
+                                participant["mic_enabled"] = message["mic_enabled"]
+                                break
+                    
+                    await broadcast_to_room(room_id, {
+                        "type": "participant_updated",
+                        "room": active_rooms[room_id]
+                    })
+                    
+                else:
+                    # Forward other messages
+                    await broadcast_to_room(room_id, message, exclude=websocket)
             
-    except WebSocketDisconnect:
-        # Clean up on disconnect
-        if websocket in room_connections.get(room_id, []):
-            room_connections[room_id].remove(websocket)
-        
-        # Notify others about disconnection
-        await broadcast_to_room(room_id, {
-            "type": "participant_disconnected",
-            "user_id": user_id,
-            "timestamp": "2025-01-01T00:00:00Z"
-        })
-        
-# ADD: Get specific room endpoint
-@app.get("/api/rooms/{room_id}")
-async def get_room(room_id: str):
-    """Get details of a specific room"""
-    if room_id in active_rooms:
-        return {"room": active_rooms[room_id]}
-    return JSONResponse({"error": "Room not found"}, status_code=404)
+            except json.JSONDecodeError as e:
+                print(f"Invalid JSON from {user_id}: {e}")
+                continue
 
-# ADD: Session data submission for groups
-@app.post("/api/rooms/{room_id}/submit-session")
-async def submit_group_session(room_id: str, session_data: dict):
-    """Store group session data and generate reports"""
-    if room_id in active_rooms:
-        active_rooms[room_id]["session_data"] = session_data
+            except Exception as e:
+                print(f"Error processing message from {user_id}: {e}")
+                break
+                
+    except WebSocketDisconnect:
+        print(f"🔌 WebSocket disconnected for user {user_id} in room {room_id}")
         
-        # Generate comprehensive reports here
-        # You can integrate with your existing report generation logic
+    except Exception as e:
+        print(f"❌ WebSocket error for user {user_id}: {e}")
         
-        return {"status": "success", "message": "Session data stored"}
-    return JSONResponse({"error": "Room not found"}, status_code=404)
+    finally:
+        # CLEANUP: Remove participant and connection
+        try:
+            if participant_added and room_id in active_rooms:
+                room = active_rooms[room_id]
+                original_count = len(room["participants"])
+                room["participants"] = [p for p in room["participants"] if p.get("user_id") != user_id]
+                new_count = len(room["participants"])
+                
+                if original_count != new_count:
+                    print(f"🗑️ Removed participant {user_id}. Participants: {original_count} -> {new_count}")
+                    
+                    # Notify others about disconnection
+                    try:
+                        await broadcast_to_room(room_id, {
+                            "type": "participant_disconnected",
+                            "user_id": user_id,
+                            "room": room
+                        }) 
+                    except:
+                        pass
+            
+            # Remove from tracking
+            if room_id in active_connections and connection_key in active_connections[room_id]:
+                del active_connections[room_id][connection_key]
+            
+            # Remove WebSocket connection
+            if websocket in room_connections.get(room_id, []):
+                room_connections[room_id].remove(websocket)
+                
+            # Clean up empty rooms
+            if room_id in active_connections and not active_connections[room_id]:
+                del active_connections[room_id]
+                
+        except Exception as cleanup_error:
+            print(f"⚠️ Cleanup error for {user_id}: {cleanup_error}")

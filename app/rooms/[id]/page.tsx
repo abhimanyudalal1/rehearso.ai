@@ -51,8 +51,11 @@ export default function RoomPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [liveFeedbacks, setLiveFeedbacks] = useState<Feedback[]>([])
   const [personalReport, setPersonalReport] = useState<any>(null)
+  const [socket, setSocket] = useState<WebSocket | null>(null)
 
   const localVideoRef = useRef<HTMLVideoElement>(null)
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null) // Add this state
+
   const remoteVideosRef = useRef<Map<string, HTMLVideoElement>>(new Map())
   const speakingStartTime = useRef<number>(0)
   const mediaPipeData = useRef<any>({
@@ -61,127 +64,55 @@ export default function RoomPage() {
     confidenceScore: 0,
     speakingPace: 0,
   })
+  
 
   useEffect(() => {
     if (!id) return
 
-    const loadRoom = () => {
+    let isCleanedUp = false
+    let currentSocket: WebSocket | null = null
+    let connectionAttempted = false
+
+    const loadRoom = async () => {
       try {
         setIsLoading(true)
         setError(null)
 
-        let rooms: Room[] = []
-        const roomsRaw = localStorage.getItem("practiceRooms")
-
-        if (roomsRaw) {
-          try {
-            const parsed = JSON.parse(roomsRaw)
-            if (Array.isArray(parsed)) {
-              rooms = parsed.filter((room) => room && typeof room === "object" && room.id)
-            } else {
-              console.warn("practiceRooms is not an array, initializing empty array")
-              localStorage.setItem("practiceRooms", JSON.stringify([]))
-            }
-          } catch (parseError) {
-            console.error("Failed to parse practiceRooms:", parseError)
-            localStorage.setItem("practiceRooms", JSON.stringify([]))
-          }
+        const response = await fetch(`http://localhost:8000/api/rooms/${id}`)
+        
+        if (!response.ok) {
+          throw new Error(`Room not found: ${response.status}`)
+        }
+        
+        const data = await response.json()
+        
+        if (!data.room) {
+          setError("Room not found")
+          return
         }
 
-        if (rooms.length === 0) {
-          const defaultRoom: Room = {
-            id: id,
-            name: "Practice Room",
-            host_id: currentUser.id,
-            topic_category: "Everyday Conversations",
-            time_per_speaker: 2,
-            max_participants: 6,
-            total_duration: 12,
-            is_public: true,
-            description: "Default practice room",
-            status: "waiting",
-            created_at: new Date().toISOString(),
-            participants: [],
-            speaking_order: [],
-            session_feedbacks: [],
-            live_feedbacks: [],
-          }
-
-          rooms = [defaultRoom]
-          localStorage.setItem("practiceRooms", JSON.stringify(rooms))
+        const foundRoom = data.room
+        const transformedRoom: Room = {
+          id: foundRoom.id,
+          name: foundRoom.name,
+          host_id: foundRoom.host_id || "host-id",
+          topic_category: foundRoom.topic_category,
+          time_per_speaker: foundRoom.time_per_speaker,
+          max_participants: foundRoom.max_participants,
+          total_duration: foundRoom.time_per_speaker * foundRoom.max_participants,
+          is_public: foundRoom.is_public,
+          description: foundRoom.description,
+          status: foundRoom.status,
+          created_at: foundRoom.created_at,
+          participants: foundRoom.participants || [],
+          speaking_order: foundRoom.speaking_order || [],
+          session_feedbacks: [],
+          live_feedbacks: [],
         }
 
-        let foundRoom = rooms.find((r: Room) => r && r.id === id)
-
-        if (!foundRoom) {
-          foundRoom = {
-            id: id,
-            name: `Room ${id}`,
-            host_id: currentUser.id,
-            topic_category: "Everyday Conversations",
-            time_per_speaker: 2,
-            max_participants: 6,
-            total_duration: 12,
-            is_public: true,
-            description: "Auto-created practice room",
-            status: "waiting",
-            created_at: new Date().toISOString(),
-            participants: [],
-            speaking_order: [],
-            session_feedbacks: [],
-            live_feedbacks: [],
-          }
-
-          rooms.push(foundRoom)
-          localStorage.setItem("practiceRooms", JSON.stringify(rooms))
-        }
-
-        // Ensure all required arrays exist
-        if (!foundRoom.participants) foundRoom.participants = []
-        if (!foundRoom.speaking_order) foundRoom.speaking_order = []
-        if (!foundRoom.session_feedbacks) foundRoom.session_feedbacks = []
-        if (!foundRoom.live_feedbacks) foundRoom.live_feedbacks = []
-
-        setRoom(foundRoom)
+        setRoom(transformedRoom)
         setIsHost(foundRoom.host_id === currentUser.id)
-        setLiveFeedbacks(foundRoom.live_feedbacks || [])
 
-        const existingParticipant = foundRoom.participants.find((p: Participant) => p && p.id === currentUser.id)
-
-        if (!existingParticipant) {
-          if (foundRoom.participants.length >= foundRoom.max_participants) {
-            setError("Room is full. Please try another room.")
-            return
-          }
-
-          const newParticipant: Participant = {
-            id: currentUser.id,
-            name: currentUser.name,
-            is_host: foundRoom.host_id === currentUser.id,
-            camera_enabled: true,
-            mic_enabled: true,
-            joined_at: new Date().toISOString(),
-            has_spoken: false,
-            speaking_time_used: 0,
-            feedback_received: [],
-            mediapipe_analysis: {
-              eye_contact_percentage: 0,
-              gesture_count: 0,
-              confidence_score: 0,
-              speaking_pace: 0,
-              volume_consistency: 0,
-            },
-          }
-
-          foundRoom.participants.push(newParticipant)
-
-          const updatedRooms = rooms.map((r) => (r.id === foundRoom!.id ? foundRoom : r))
-          localStorage.setItem("practiceRooms", JSON.stringify(updatedRooms))
-
-          setRoom({ ...foundRoom })
-        }
-
-        roomManager.loadRoom(foundRoom)
       } catch (error) {
         console.error("Error loading room:", error)
         setError("Failed to load room. Please try again.")
@@ -190,65 +121,403 @@ export default function RoomPage() {
       }
     }
 
-    loadRoom()
+    const connectWebSocket = () => {
+      if (isCleanedUp || connectionAttempted || currentSocket) {
+        console.log("🚫 WebSocket connection prevented - already attempted or exists")
+        return null
+      }
+      
+      connectionAttempted = true
+      console.log(`🔗 Connecting to WebSocket: ws://localhost:8000/ws/room/${id}`)
+      
+      const ws = new WebSocket(`ws://localhost:8000/ws/room/${id}`)
+      currentSocket = ws
+      
+      ws.onopen = () => {
+        if (isCleanedUp) {
+          console.log("🧹 Connection opened but component unmounted, closing...")
+          ws.close()
+          return
+        }
+        
+        console.log("✅ Connected to room WebSocket")
+        setSocket(ws)
+        setError(null)
+        
+        // Set the WebSocket for WebRTC service
+        webrtcService.setSignalingSocket(ws)
+        
+        // Send user information immediately
+        ws.send(JSON.stringify({
+          type: "set_participant_name",
+          user_name: currentUser.name
+        }))
+      }
 
-    const initWebRTC = async () => {
-      try {
-        await initializeWebRTC()
-      } catch (error) {
-        console.error("WebRTC initialization failed:", error)
+      ws.onmessage = async (event) => {
+        if (isCleanedUp) return
+        
+        try {
+          const message = JSON.parse(event.data)
+          console.log("📨 Received:", message.type)
+          
+          switch (message.type) {
+            case "room_state":
+              console.log("📊 Room state received, participants:", message.room.participants?.length)
+              console.log("🆔 Received user_id from backend:", message.user_id)
+              setRoom(message.room)
+              
+              // ✅ CRITICAL: Set the user ID for WebRTC service
+              if (message.user_id) {
+                console.log("🆔 Setting currentUserId and WebRTC user ID to:", message.user_id)
+                setCurrentUserId(message.user_id)
+                webrtcService.setCurrentUserId(message.user_id)
+              } else {
+                console.error("❌ No user_id received from backend!")
+              }
+              
+              
+              const currentParticipant = message.room.participants?.find(
+                (p: any) => (p.user_id || p.id) === message.user_id
+              )
+              if (currentParticipant?.is_host) {
+                setIsHost(true)
+              }
+              
+              // Initialize WebRTC after UI has time to render
+              setTimeout(async () => {
+                if (!isCleanedUp) {
+                  try {
+                    console.log("🎥 Initializing WebRTC after room state...")
+                    await initializeWebRTC()
+                    
+                    // IMPORTANT: Wait for video elements to render before connecting
+                    setTimeout(() => {
+                      if (message.room.participants && message.room.participants.length > 1) {
+                        const otherParticipants = message.room.participants.filter(
+                          (p: any) => (p.user_id || p.id) !== message.user_id
+                        )
+                        
+                        console.log("🔗 Establishing connections with existing participants:", otherParticipants.length)
+                        
+                        otherParticipants.forEach(async (participant: any, index: number) => {
+                          const participantId = participant.user_id || participant.id
+                          console.log("🔗 Connecting to existing participant:", participantId)
+                          
+                          setTimeout(async () => {
+                            try {
+                              await webrtcService.createOffer(participantId)
+                            } catch (error) {
+                              console.error("Failed to create offer for existing participant:", error)
+                            }
+                          }, 3000 + (index * 1000)) // Staggered with longer delays
+                        })
+                      }
+                    }, 2000) // Wait for video elements to be created
+                    
+                  } catch (error) {
+                    console.error("WebRTC initialization failed:", error)
+                  }
+                }
+              }, 1000) // Initial delay for UI rendering
+              break
+            case "participant_joined":
+              console.log("👥 Participant joined. Total:", message.room.participants?.length)
+              setRoom(message.room)
+              
+              // IMPORTANT: Only initiate connection if we have a user ID
+              if (message.new_participant && message.new_participant.user_id !== currentUserId && currentUserId) {
+                const newParticipantId = message.new_participant.user_id
+                console.log("🔗 Initiating WebRTC connection:", currentUserId, "->", newParticipantId)
+                
+                // Wait for UI to render the new video element
+                setTimeout(async () => {
+                  try {
+                    console.log("🎯 Creating offer for participant:", newParticipantId)
+                    await webrtcService.createOffer(newParticipantId)
+                  } catch (error) {
+                    console.error("Failed to create offer for new participant:", error)
+                  }
+                }, 3000) // Increased delay to ensure UI renders
+              }
+              break
+              
+            case "participant_disconnected":
+              console.log("👋 Participant left. Total:", message.room.participants?.length)
+              setRoom(message.room)
+              break
+              
+            case "participant_updated":
+              setRoom(message.room)
+              break
+              
+            case "session_started":
+              setRoom(message.room)
+              setSessionPhase("preparation")
+              generateTopic()
+              break
+              
+            case "speaker_changed":
+              setRoom(message.room)
+              if (message.room.status === "completed") {
+                setSessionPhase("completed")
+                getPersonalReport()
+                setShowReport(true)
+              }
+              break
+              
+            case "send_feedback":
+              setLiveFeedbacks(prev => [...prev, message.feedback])
+              break
+              
+            case "webrtc_offer":
+  console.log("📞 Received WebRTC offer from:", message.from, "to:", message.to)
+  console.log("📞 Current user ID:", currentUserId)
+  console.log("📞 Should process?", !message.to || message.to === currentUserId)
+  
+  if (!message.to || message.to === currentUserId) {
+    console.log("✅ Processing WebRTC offer from:", message.from)
+    try {
+      await webrtcService.handleRemoteOffer(message.from, message.offer)
+      console.log("✅ Successfully handled offer from:", message.from)
+    } catch (error) {
+      console.error("❌ Error handling offer:", error)
+    }
+  } else {
+    console.log("⏭️ Skipping offer - not for us")
+  }
+  break
+
+            case "webrtc_answer":
+              console.log("📞 Received WebRTC answer from:", message.from, "to:", message.to, "currentUserId:", currentUserId)
+              // ✅ FIXED: Use currentUserId instead of message.user_id
+              if (!message.to || message.to === currentUserId) {
+                console.log("✅ Processing WebRTC answer from:", message.from)
+                webrtcService.handleAnswer(message.from, message.answer)
+              } else {
+                console.log("⏭️ Skipping answer - not for us. Target:", message.to, "We are:", currentUserId)
+              }
+              break
+
+            case "webrtc_ice_candidate":
+              console.log("🧊 Received ICE candidate from:", message.from, "to:", message.to, "currentUserId:", currentUserId)
+              // ✅ FIXED: Use currentUserId instead of message.user_id
+              if (!message.to || message.to === currentUserId) {
+                console.log("✅ Processing ICE candidate from:", message.from)
+                webrtcService.handleIceCandidate(message.from, message.candidate)
+              } else {
+                console.log("⏭️ Skipping ICE candidate - not for us. Target:", message.to, "We are:", currentUserId)
+              }
+              break
+          }
+        } catch (error) {
+          console.error("Failed to parse WebSocket message:", error)
+        }
+      }
+
+      ws.onclose = (event) => {
+        if (isCleanedUp) return
+        
+        console.log("❌ WebSocket closed:", event.code, event.reason)
+        setSocket(null)
+        currentSocket = null
+        connectionAttempted = false
+        
+        if (event.code !== 1000 && event.code !== 1001) {
+          setError("Connection lost. Please refresh the page.")
+        }
+      }
+
+      ws.onerror = (error) => {
+        console.error("🚨 WebSocket error:", error)
+        setError("Failed to connect to room")
+        setSocket(null)
+        currentSocket = null
+        connectionAttempted = false
+      }
+
+      return ws
+    }
+
+    const initializeRoom = async () => {
+      console.log("🚀 Starting room initialization...")
+      
+      await loadRoom()
+      
+      if (!isCleanedUp && !error) {
+        console.log("📡 Room loaded successfully, connecting WebSocket...")
+        
+        setTimeout(() => {
+          if (!isCleanedUp && !currentSocket) {
+            connectWebSocket()
+          }
+        }, 100)
       }
     }
 
-    if (!error) {
-      initWebRTC()
-    }
+    initializeRoom()
 
     return () => {
+      isCleanedUp = true
+      console.log("🧹 Cleaning up room connection")
+      
+      if (currentSocket) {
+        if (currentSocket.readyState === WebSocket.OPEN) {
+          currentSocket.close(1000, "Component unmounting")
+        }
+        currentSocket = null
+      }
+      
+      connectionAttempted = false
+      setSocket(null)
       webrtcService.endCall()
       mediaPipeAnalyzer.stop()
     }
   }, [id, currentUser.id])
 
   const initializeWebRTC = async () => {
-    try {
-      const stream = await webrtcService.initializeLocalStream()
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream
-      }
+  try {
+    console.log("🎥 Starting WebRTC initialization...")
+    
+    const stream = await webrtcService.initializeLocalStream()
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = stream
+    }
 
-      // Initialize MediaPipe analyzer
-      if (localVideoRef.current) {
-        await mediaPipeAnalyzer.initialize(localVideoRef.current)
-      }
+    if (localVideoRef.current) {
+      await mediaPipeAnalyzer.initialize(localVideoRef.current)
+    }
 
-      webrtcService.onRemoteStreamAdded = (peerId: string, stream: MediaStream) => {
-        const videoElement = remoteVideosRef.current.get(peerId)
-        if (videoElement) {
-          videoElement.srcObject = stream
+    // ENHANCED: Better remote stream handler with DOM lookup
+    webrtcService.onRemoteStreamAdded = (peerId: string, stream: MediaStream) => {
+      console.log("🎥 Remote stream received from peer:", peerId)
+      console.log("📺 Stream details:", {
+        id: stream.id,
+        active: stream.active,
+        videoTracks: stream.getVideoTracks().length,
+        audioTracks: stream.getAudioTracks().length
+      })
+      
+      // Method 1: Try ref first
+      let videoElement = remoteVideosRef.current.get(peerId)
+      
+      // Method 2: If ref not found, search DOM directly
+      if (!videoElement) {
+        console.log("🔍 Video element not found in ref, searching DOM...")
+        const videoElements = document.querySelectorAll('video[data-peer-id]')
+        for (const el of videoElements) {
+          if (el.getAttribute('data-peer-id') === peerId) {
+            videoElement = el as HTMLVideoElement
+            console.log("✅ Found video element in DOM for peer:", peerId)
+            // Update the ref for future use
+            remoteVideosRef.current.set(peerId, videoElement)
+            break
+          }
         }
       }
-    } catch (error) {
-      console.error("Failed to initialize WebRTC:", error)
+      
+      // Method 3: If still not found, try finding by key pattern
+      if (!videoElement) {
+        console.log("🔍 Searching for video element by pattern...")
+        const allVideos = document.querySelectorAll('video')
+        for (const video of allVideos) {
+          // Skip local video
+          if (video === localVideoRef.current) continue
+          
+          // Find video without srcObject (available for assignment)
+          if (!video.srcObject) {
+            videoElement = video as HTMLVideoElement
+            console.log("✅ Found available video element for peer:", peerId)
+            // Mark this element with peer ID and update ref
+            videoElement.setAttribute('data-peer-id', peerId)
+            remoteVideosRef.current.set(peerId, videoElement)
+            break
+          }
+        }
+      }
+      
+      if (videoElement) {
+        console.log("📺 Assigning stream to video element for peer:", peerId)
+        videoElement.srcObject = stream
+        
+        // Ensure video plays
+        videoElement.play().then(() => {
+          console.log("✅ Video playing successfully for peer:", peerId)
+        }).catch(error => {
+          console.error("❌ Error playing video for peer:", peerId, error)
+          // Try again after a delay
+          setTimeout(() => {
+            videoElement.play().catch(e => console.error("❌ Retry failed:", e))
+          }, 1000)
+        })
+      } else {
+        console.error("❌ No video element found for peer:", peerId)
+        console.log("Available refs:", Array.from(remoteVideosRef.current.keys()))
+        console.log("Available DOM videos:", document.querySelectorAll('video').length)
+        
+        // Enhanced retry with DOM search
+        let retryCount = 0
+        const maxRetries = 10
+        
+        const retryAssignment = () => {
+          // Search all video elements in DOM
+          const allVideos = document.querySelectorAll('video')
+          let foundElement = null
+          
+          for (const video of allVideos) {
+            if (video === localVideoRef.current) continue
+            if (!video.srcObject || video.srcObject.id === 'placeholder') {
+              foundElement = video as HTMLVideoElement
+              break
+            }
+          }
+          
+          if (foundElement) {
+            console.log(`📺 Retry ${retryCount + 1} successful for peer:`, peerId)
+            foundElement.setAttribute('data-peer-id', peerId)
+            foundElement.srcObject = stream
+            remoteVideosRef.current.set(peerId, foundElement)
+            foundElement.play().catch(error => console.error("❌ Retry play error:", error))
+          } else if (retryCount < maxRetries) {
+            retryCount++
+            console.log(`🔄 Retry ${retryCount}/${maxRetries} for peer:`, peerId)
+            setTimeout(retryAssignment, 500 * retryCount)
+          } else {
+            console.error("❌ Failed to assign stream after", maxRetries, "retries for peer:", peerId)
+          }
+        }
+        
+        setTimeout(retryAssignment, 500)
+      }
     }
+    
+    webrtcService.onPeerDisconnected = (peerId: string) => {
+      console.log("👋 Peer disconnected:", peerId)
+      const videoElement = remoteVideosRef.current.get(peerId)
+      if (videoElement) {
+        videoElement.srcObject = null
+        videoElement.removeAttribute('data-peer-id')
+      }
+      remoteVideosRef.current.delete(peerId)
+    }
+    
+    console.log("✅ WebRTC initialization complete")
+    
+  } catch (error) {
+    console.error("Failed to initialize WebRTC:", error)
+    setError("Failed to initialize camera and microphone")
   }
-
+}
   const toggleCamera = () => {
     const newState = !cameraEnabled
     setCameraEnabled(newState)
     webrtcService.toggleVideo(newState)
-
-    if (room) {
-      const updatedRoom = { ...room }
-      const participant = updatedRoom.participants.find((p) => p.id === currentUser.id)
-      if (participant) {
-        participant.camera_enabled = newState
-        setRoom(updatedRoom)
-
-        const rooms = JSON.parse(localStorage.getItem("practiceRooms") || "[]")
-        const updatedRooms = rooms.map((r: Room) => (r.id === room.id ? updatedRoom : r))
-        localStorage.setItem("practiceRooms", JSON.stringify(updatedRooms))
-      }
+    if (socket && room) {
+      socket.send(JSON.stringify({
+        type: "toggle_camera",
+        participant_id: currentUser.id,
+        camera_enabled: newState
+      }))
     }
   }
 
@@ -256,60 +525,22 @@ export default function RoomPage() {
     const newState = !micEnabled
     setMicEnabled(newState)
     webrtcService.toggleAudio(newState)
-
-    if (room) {
-      const updatedRoom = { ...room }
-      const participant = updatedRoom.participants.find((p) => p.id === currentUser.id)
-      if (participant) {
-        participant.mic_enabled = newState
-        setRoom(updatedRoom)
-
-        const rooms = JSON.parse(localStorage.getItem("practiceRooms") || "[]")
-        const updatedRooms = rooms.map((r: Room) => (r.id === room.id ? updatedRoom : r))
-        localStorage.setItem("practiceRooms", JSON.stringify(updatedRooms))
-      }
+    if (socket && room) {
+      socket.send(JSON.stringify({
+        type: "toggle_mic",
+        participant_id: currentUser.id,
+        mic_enabled: newState
+      }))
     }
   }
 
   const startSession = () => {
-    if (!room || !isHost) return
+    if (!room || !isHost || !socket) return
 
-    const updatedRoom = { ...room }
-    updatedRoom.status = "active"
-    updatedRoom.session_start_time = new Date().toISOString()
-
-    if (updatedRoom.speaking_order.length === 0) {
-      const participantIds = updatedRoom.participants.map((p) => p.id)
-      for (let i = participantIds.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1))
-        ;[participantIds[i], participantIds[j]] = [participantIds[j], participantIds[i]]
-      }
-      updatedRoom.speaking_order = participantIds
-    }
-
-    if (updatedRoom.speaking_order.length > 0) {
-      updatedRoom.current_speaker = updatedRoom.speaking_order[0]
-    }
-
-    setRoom(updatedRoom)
-    setSessionPhase("preparation")
-    setPreparationTime(60)
-    generateTopic()
-
-    const rooms = JSON.parse(localStorage.getItem("practiceRooms") || "[]")
-    const updatedRooms = rooms.map((r: Room) => (r.id === room.id ? updatedRoom : r))
-    localStorage.setItem("practiceRooms", JSON.stringify(updatedRooms))
-
-    const prepTimer = setInterval(() => {
-      setPreparationTime((prev) => {
-        if (prev <= 1) {
-          clearInterval(prepTimer)
-          startSpeaking()
-          return 0
-        }
-        return prev - 1
-      })
-    }, 1000)
+    socket.send(JSON.stringify({
+      type: "start_session",
+      room_id: room.id
+    }))
   }
 
   const generateTopic = () => {
@@ -349,7 +580,6 @@ export default function RoomPage() {
     setTimeRemaining(room.time_per_speaker * 60)
     speakingStartTime.current = Date.now()
 
-    // Start MediaPipe analysis for current speaker
     if (room.current_speaker === currentUser.id) {
       mediaPipeAnalyzer.startAnalysis()
     }
@@ -367,30 +597,27 @@ export default function RoomPage() {
   }
 
   const endCurrentSpeech = async () => {
-    if (!room) return
+    if (!room || !socket) return
 
-    // Stop MediaPipe analysis and get results
-    if (room.current_speaker === currentUser.id) {
-      const analysisResults = await mediaPipeAnalyzer.stopAnalysis()
-      mediaPipeData.current = analysisResults
+    const analysisResults = await mediaPipeAnalyzer.stopAnalysis()
+    mediaPipeData.current = analysisResults
 
-      // Update participant's MediaPipe data
-      const updatedRoom = { ...room }
-      const currentParticipant = updatedRoom.participants.find((p) => p.id === currentUser.id)
-      if (currentParticipant) {
-        currentParticipant.mediapipe_analysis = {
+    if (socket) {
+      socket.send(JSON.stringify({
+        type: "update_participant_data",
+        participant_id: currentUser.id,
+        mediapipe_analysis: {
           eye_contact_percentage: analysisResults.eyeContactPercentage,
           gesture_count: analysisResults.gestureCount,
           confidence_score: analysisResults.confidenceScore,
           speaking_pace: analysisResults.speakingPace,
           volume_consistency: analysisResults.volumeConsistency,
-        }
-        currentParticipant.speaking_time_used = (Date.now() - speakingStartTime.current) / 1000
-      }
-
-      setRoom(updatedRoom)
-      saveRoomToStorage(updatedRoom)
+        },
+        speaking_time_used: (Date.now() - speakingStartTime.current) / 1000
+      }))
     }
+    await getPersonalReport()
+    setShowReport(true)
 
     setSessionPhase("feedback")
 
@@ -400,291 +627,69 @@ export default function RoomPage() {
   }
 
   const nextSpeaker = () => {
-    if (!room) return
+    if (!room || !isHost || !socket) return
 
-    const currentIndex = room.speaking_order.findIndex((id) => id === room.current_speaker)
-    if (currentIndex === -1) return
-
-    const updatedRoom = { ...room }
-
-    const currentParticipant = updatedRoom.participants.find((p) => p.id === room.current_speaker)
-    if (currentParticipant) {
-      currentParticipant.has_spoken = true
-    }
-
-    if (currentIndex < updatedRoom.speaking_order.length - 1) {
-      updatedRoom.current_speaker = updatedRoom.speaking_order[currentIndex + 1]
-      setRoom(updatedRoom)
-      setSessionPhase("preparation")
-      setPreparationTime(60)
-      generateTopic()
-
-      const prepTimer = setInterval(() => {
-        setPreparationTime((prev) => {
-          if (prev <= 1) {
-            clearInterval(prepTimer)
-            startSpeaking()
-            return 0
-          }
-          return prev - 1
-        })
-      }, 1000)
-    } else {
-      updatedRoom.status = "completed"
-      updatedRoom.current_speaker = undefined
-      setRoom(updatedRoom)
-      setSessionPhase("completed")
-
-      // Generate comprehensive reports for all participants
-      generatePersonalReports(updatedRoom)
-      setShowReport(true)
-    }
-
-    saveRoomToStorage(updatedRoom)
+    socket.send(JSON.stringify({
+      type: "next_speaker",
+      room_id: room.id
+    }))
   }
+  // ✅ ENHANCED: Better debug function
+const debugWebRTCConnections = () => {
+  console.log("🔍 === WebRTC Debug Info ===")
+  console.log("Current User ID:", currentUserId)
+  console.log("Room Participants:", room?.participants?.map(p => ({ 
+    id: p.user_id || p.id, 
+    name: p.user_name || p.name 
+  })))
+  console.log("WebRTC Current User ID:", webrtcService.getCallState())
+  console.log("WebRTC Peer Connections:", Array.from(webrtcService.getCallState().participants))
+  console.log("Remote Streams:", Array.from(webrtcService.getCallState().remoteStreams.entries()))
+  console.log("Video Elements:", Array.from(remoteVideosRef.current.entries()))
+  console.log("Socket ready state:", socket?.readyState)
+  console.log("=== End Debug Info ===")
+}
+  // Call this every 10 seconds for debugging
+  useEffect(() => {
+    const interval = setInterval(debugWebRTCConnections, 10000)
+    return () => clearInterval(interval)
+  }, [currentUserId, room])
 
   const sendFeedback = () => {
-    if (!room || !feedbackMessage.trim()) return
+    if (!room || !feedbackMessage.trim() || !socket) return
 
-    const currentSpeaker = room.participants.find((p) => p.id === room.current_speaker)
-    if (currentSpeaker && currentSpeaker.id !== currentUser.id) {
-      const newFeedback: Feedback = {
-        id: Date.now().toString(),
-        from_participant: currentUser.id,
-        from_name: currentUser.name,
-        to_participant: currentSpeaker.id,
-        message: feedbackMessage,
-        timestamp: new Date().toISOString(),
-        type: feedbackType,
-        session_phase: sessionPhase,
-      }
-
-      const updatedRoom = { ...room }
-
-      // Add to live feedbacks for real-time display
-      updatedRoom.live_feedbacks = [...(updatedRoom.live_feedbacks || []), newFeedback]
-
-      // Add to participant's feedback received
-      const speaker = updatedRoom.participants.find((p) => p.id === currentSpeaker.id)
-      if (speaker) {
-        speaker.feedback_received.push(newFeedback)
-      }
-
-      setRoom(updatedRoom)
-      setLiveFeedbacks(updatedRoom.live_feedbacks)
-      setFeedbackMessage("")
-      saveRoomToStorage(updatedRoom)
+    const newFeedback = {
+      id: Date.now().toString(),
+      from_participant: currentUser.id,
+      from_name: currentUser.name,
+      to_participant: room.current_speaker,
+      message: feedbackMessage,
+      timestamp: new Date().toISOString(),
+      type: feedbackType,
+      session_phase: sessionPhase,
     }
+
+    socket.send(JSON.stringify({
+      type: "send_feedback",
+      feedback: newFeedback
+    }))
+
+    setFeedbackMessage("")
   }
 
-  const generatePersonalReports = (room: Room) => {
-    const reports: any = {}
-
-    room.participants.forEach((participant) => {
-      const feedbacksReceived = participant.feedback_received || []
-      const positiveFeedbacks = feedbacksReceived.filter((f) => f.type === "positive")
-      const constructiveFeedbacks = feedbacksReceived.filter((f) => f.type === "constructive")
-      const questions = feedbacksReceived.filter((f) => f.type === "question")
-
-      // Analyze feedback content for insights
-      const feedbackAnalysis = analyzeFeedbackContent(feedbacksReceived)
-
-      // Calculate scores based on MediaPipe data and feedback
-      const mediaPipeData = participant.mediapipe_analysis || {}
-      const overallScore = calculateOverallScore(mediaPipeData, feedbacksReceived)
-
-      const report = {
-        participant_id: participant.id,
-        participant_name: participant.name,
-        room_id: room.id,
-        session_date: new Date().toISOString(),
-        speaking_duration: participant.speaking_time_used || 0,
-
-        // Scores based on MediaPipe analysis
-        eye_contact_score: Math.round(mediaPipeData.eye_contact_percentage || 0),
-        gesture_score: Math.min(100, Math.round((mediaPipeData.gesture_count || 0) * 10)),
-        confidence_score: Math.round(mediaPipeData.confidence_score || 0),
-        pace_score: Math.round(mediaPipeData.speaking_pace || 0),
-        volume_score: Math.round(mediaPipeData.volume_consistency || 0),
-        overall_score: overallScore,
-
-        // Feedback analysis
-        total_feedbacks_received: feedbacksReceived.length,
-        positive_feedback_count: positiveFeedbacks.length,
-        constructive_feedback_count: constructiveFeedbacks.length,
-        questions_received: questions.length,
-
-        // Detailed feedback breakdown
-        feedback_summary: {
-          strengths: feedbackAnalysis.strengths,
-          improvement_areas: feedbackAnalysis.improvements,
-          common_themes: feedbackAnalysis.themes,
-        },
-
-        // Peer feedback quotes
-        peer_feedback: {
-          positive_comments: positiveFeedbacks.map((f) => ({
-            from: f.from_name,
-            comment: f.message,
-            timestamp: f.timestamp,
-          })),
-          constructive_comments: constructiveFeedbacks.map((f) => ({
-            from: f.from_name,
-            comment: f.message,
-            timestamp: f.timestamp,
-          })),
-          questions_asked: questions.map((f) => ({
-            from: f.from_name,
-            question: f.message,
-            timestamp: f.timestamp,
-          })),
-        },
-
-        // AI-generated insights
-        insights: generatePersonalInsights(mediaPipeData, feedbackAnalysis, participant),
-
-        // Recommendations
-        recommendations: generateRecommendations(mediaPipeData, feedbackAnalysis),
-
-        generated_at: new Date().toISOString(),
-      }
-
-      reports[participant.id] = report
-    })
-
-    // Save reports to localStorage
-    localStorage.setItem(`session_reports_${room.id}`, JSON.stringify(reports))
-
-    // Set personal report for current user
-    if (reports[currentUser.id]) {
-      setPersonalReport(reports[currentUser.id])
+  const getPersonalReport = async () => {
+    if (!room) {
+      console.error("Cannot get personal report: room is null")
+      return
     }
-  }
-
-  const analyzeFeedbackContent = (feedbacks: Feedback[]) => {
-    const strengths: string[] = []
-    const improvements: string[] = []
-    const themes: string[] = []
-
-    const positiveKeywords = [
-      "good",
-      "great",
-      "excellent",
-      "clear",
-      "confident",
-      "engaging",
-      "well",
-      "strong",
-      "impressive",
-    ]
-    const improvementKeywords = ["improve", "better", "more", "less", "try", "consider", "maybe", "could", "should"]
-
-    feedbacks.forEach((feedback) => {
-      const message = feedback.message.toLowerCase()
-
-      if (feedback.type === "positive" || positiveKeywords.some((keyword) => message.includes(keyword))) {
-        strengths.push(feedback.message)
-      }
-
-      if (feedback.type === "constructive" || improvementKeywords.some((keyword) => message.includes(keyword))) {
-        improvements.push(feedback.message)
-      }
-
-      // Extract common themes
-      if (message.includes("eye contact")) themes.push("Eye Contact")
-      if (message.includes("voice") || message.includes("speaking")) themes.push("Voice & Delivery")
-      if (message.includes("gesture") || message.includes("body")) themes.push("Body Language")
-      if (message.includes("pace") || message.includes("speed")) themes.push("Speaking Pace")
-      if (message.includes("content") || message.includes("topic")) themes.push("Content Quality")
-    })
-
-    return {
-      strengths: [...new Set(strengths)],
-      improvements: [...new Set(improvements)],
-      themes: [...new Set(themes)],
+    
+    try {
+      const response = await fetch(`http://localhost:8000/api/rooms/${room.id}/reports/${currentUser.id}`)
+      const report = await response.json()
+      setPersonalReport(report)
+    } catch (error) {
+      console.error("Failed to load personal report:", error)
     }
-  }
-
-  const calculateOverallScore = (mediaPipeData: any, feedbacks: Feedback[]) => {
-    const eyeContactScore = mediaPipeData.eye_contact_percentage || 0
-    const gestureScore = Math.min(100, (mediaPipeData.gesture_count || 0) * 10)
-    const confidenceScore = mediaPipeData.confidence_score || 0
-    const paceScore = mediaPipeData.speaking_pace || 0
-    const volumeScore = mediaPipeData.volume_consistency || 0
-
-    // Weight MediaPipe scores (70% of total)
-    const mediaPipeAverage = (eyeContactScore + gestureScore + confidenceScore + paceScore + volumeScore) / 5
-
-    // Weight peer feedback (30% of total)
-    const positiveFeedbacks = feedbacks.filter((f) => f.type === "positive").length
-    const totalFeedbacks = feedbacks.length
-    const feedbackScore = totalFeedbacks > 0 ? (positiveFeedbacks / totalFeedbacks) * 100 : 50
-
-    return Math.round(mediaPipeAverage * 0.7 + feedbackScore * 0.3)
-  }
-
-  const generatePersonalInsights = (mediaPipeData: any, feedbackAnalysis: any, participant: Participant) => {
-    const insights: string[] = []
-
-    // MediaPipe insights
-    if (mediaPipeData.eye_contact_percentage < 30) {
-      insights.push("Your eye contact could be improved. Try looking directly at the camera more often.")
-    } else if (mediaPipeData.eye_contact_percentage > 70) {
-      insights.push("Excellent eye contact! You maintained good visual connection throughout your speech.")
-    }
-
-    if (mediaPipeData.gesture_count < 3) {
-      insights.push("Consider using more hand gestures to emphasize your points and engage your audience.")
-    } else if (mediaPipeData.gesture_count > 15) {
-      insights.push("You used gestures effectively, but be mindful not to overdo it.")
-    }
-
-    // Feedback-based insights
-    if (feedbackAnalysis.themes.includes("Voice & Delivery")) {
-      insights.push("Multiple peers commented on your voice delivery - this seems to be a key area of focus.")
-    }
-
-    if (feedbackAnalysis.strengths.length > feedbackAnalysis.improvements.length) {
-      insights.push("Great job! You received more positive feedback than constructive criticism.")
-    }
-
-    return insights
-  }
-
-  const generateRecommendations = (mediaPipeData: any, feedbackAnalysis: any) => {
-    const recommendations: string[] = []
-
-    // MediaPipe-based recommendations
-    if (mediaPipeData.eye_contact_percentage < 50) {
-      recommendations.push("Practice maintaining eye contact by looking directly at your camera lens")
-    }
-
-    if (mediaPipeData.confidence_score < 60) {
-      recommendations.push("Work on your posture and facial expressions to project more confidence")
-    }
-
-    if (mediaPipeData.speaking_pace < 40) {
-      recommendations.push("Try to speak a bit faster to maintain audience engagement")
-    } else if (mediaPipeData.speaking_pace > 80) {
-      recommendations.push("Slow down your speaking pace to ensure clarity")
-    }
-
-    // Feedback-based recommendations
-    if (feedbackAnalysis.improvements.length > 0) {
-      recommendations.push("Focus on the constructive feedback you received from peers")
-    }
-
-    if (feedbackAnalysis.themes.includes("Body Language")) {
-      recommendations.push("Practice your body language and gestures in front of a mirror")
-    }
-
-    return recommendations
-  }
-
-  const saveRoomToStorage = (room: Room) => {
-    const rooms = JSON.parse(localStorage.getItem("practiceRooms") || "[]")
-    const updatedRooms = rooms.map((r: Room) => (r.id === room.id ? room : r))
-    localStorage.setItem("practiceRooms", JSON.stringify(updatedRooms))
   }
 
   const formatTime = (seconds: number) => {
@@ -693,7 +698,6 @@ export default function RoomPage() {
     return `${mins}:${secs.toString().padStart(2, "0")}`
   }
 
-  // Show error state
   if (error) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -747,7 +751,6 @@ export default function RoomPage() {
 
       <div className="container mx-auto px-4 py-6">
         <div className="grid lg:grid-cols-4 gap-6">
-          {/* Main Video Area */}
           <div className="lg:col-span-3">
             <Card>
               <CardHeader>
@@ -774,7 +777,6 @@ export default function RoomPage() {
               </CardHeader>
 
               <CardContent>
-                {/* Current Topic Display */}
                 {(sessionPhase === "preparation" || sessionPhase === "speaking") && currentTopic && (
                   <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg mb-6">
                     <h3 className="font-medium text-blue-900 mb-2">Current Topic:</h3>
@@ -782,82 +784,105 @@ export default function RoomPage() {
                   </div>
                 )}
 
-                {/* Video Grid */}
-                <div className="grid grid-cols-2 gap-4 mb-6">
-                  {/* Local Video */}
+                <div className="grid gap-4 mb-6" style={{ 
+                  gridTemplateColumns: `repeat(${Math.min(4, Math.max(1, room.participants?.length || 1))}, 1fr)` 
+                }}>
                   <div className="relative aspect-video bg-gray-800 rounded-lg overflow-hidden">
                     <video ref={localVideoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
                     <div className="absolute bottom-2 left-2 bg-black/50 text-white px-2 py-1 rounded text-sm">
                       You {room.current_speaker === currentUser.id && sessionPhase === "speaking" && "(Speaking)"}
                     </div>
                     <div className="absolute bottom-2 right-2 flex space-x-1">
-                      <div
-                        className={`w-6 h-6 rounded-full flex items-center justify-center ${micEnabled ? "bg-green-600" : "bg-red-600"}`}
-                      >
-                        {micEnabled ? (
-                          <Mic className="w-3 h-3 text-white" />
-                        ) : (
-                          <MicOff className="w-3 h-3 text-white" />
-                        )}
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center ${micEnabled ? "bg-green-600" : "bg-red-600"}`}>
+                        {micEnabled ? <Mic className="w-3 h-3 text-white" /> : <MicOff className="w-3 h-3 text-white" />}
                       </div>
-                      <div
-                        className={`w-6 h-6 rounded-full flex items-center justify-center ${cameraEnabled ? "bg-green-600" : "bg-red-600"}`}
-                      >
-                        {cameraEnabled ? (
-                          <Video className="w-3 h-3 text-white" />
-                        ) : (
-                          <VideoOff className="w-3 h-3 text-white" />
-                        )}
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center ${cameraEnabled ? "bg-green-600" : "bg-red-600"}`}>
+                        {cameraEnabled ? <Video className="w-3 h-3 text-white" /> : <VideoOff className="w-3 h-3 text-white" />}
                       </div>
                     </div>
                   </div>
 
-                  {/* Remote Videos */}
-                  {room.participants
-                    .filter((p) => p && p.id !== currentUser.id)
-                    .map((participant) => (
-                      <div
-                        key={participant.id}
-                        className="relative aspect-video bg-gray-800 rounded-lg overflow-hidden"
-                      >
-                        <video
-                          ref={(el) => {
-                            if (el) remoteVideosRef.current.set(participant.id, el)
-                          }}
-                          autoPlay
-                          playsInline
-                          className="w-full h-full object-cover"
-                        />
-                        <div className="absolute bottom-2 left-2 bg-black/50 text-white px-2 py-1 rounded text-sm">
-                          {participant.name}{" "}
-                          {room.current_speaker === participant.id && sessionPhase === "speaking" && "(Speaking)"}
-                          {participant.is_host && " (Host)"}
-                        </div>
-                        <div className="absolute bottom-2 right-2 flex space-x-1">
+                  {room.participants && room.participants.length > 0 && (() => {
+                    const currentUserParticipant = room.participants.find(p => 
+                      p && (p.user_name === currentUser.name || p.name === currentUser.name)
+                    )
+                    const currentUserParticipantId = currentUserParticipant?.user_id || currentUserParticipant?.id
+                    
+                    return room.participants
+                      .filter((p) => {
+                        if (!p || !(p.user_id || p.id)) return false
+                        const participantId = p.user_id || p.id
+                        return participantId !== currentUserParticipantId
+                      })
+                      .slice(0, 7)
+                      .map((participant) => {
+                        const participantId = participant.user_id || participant.id
+                        const participantName = participant.user_name || participant.name || 'Participant'
+                        
+                        return (
                           <div
-                            className={`w-6 h-6 rounded-full flex items-center justify-center ${participant.mic_enabled ? "bg-green-600" : "bg-red-600"}`}
+                            key={`remote-${participantId}`}
+                            className="relative aspect-video bg-gray-800 rounded-lg overflow-hidden"
                           >
-                            {participant.mic_enabled ? (
-                              <Mic className="w-3 h-3 text-white" />
-                            ) : (
-                              <MicOff className="w-3 h-3 text-white" />
-                            )}
+                            <video
+                              ref={(el) => {
+                                if (el && participantId) {
+                                  console.log(`📹 Setting video ref for participant: ${participantId}`)
+                                  
+                                  // Set data attribute for DOM lookup
+                                  el.setAttribute('data-peer-id', participantId)
+                                  
+                                  // Store in ref
+                                  remoteVideosRef.current.set(participantId, el)
+                                  
+                                  // Check if there's already a stream for this participant
+                                  const existingStream = webrtcService.getCallState().remoteStreams.get(participantId)
+                                  if (existingStream) {
+                                    console.log("🔄 Assigning existing stream to new video element:", participantId)
+                                    el.srcObject = existingStream
+                                    el.play().catch(error => console.error("❌ Error playing existing stream:", error))
+                                  } else {
+                                    // Set placeholder to mark this element as available
+                                    console.log("📺 Video element ready for peer:", participantId)
+                                  }
+                                }
+                              }}
+                              autoPlay
+                              playsInline
+                              className="w-full h-full object-cover"
+                              data-peer-id={participantId} // Add this for DOM lookup
+                            />
+                            <div className="absolute bottom-2 left-2 bg-black/50 text-white px-2 py-1 rounded text-sm">
+                              {participantName}{" "}
+                              {room.current_speaker === participantId && sessionPhase === "speaking" && "(Speaking)"}
+                              {participant.is_host && " (Host)"}
+                            </div>
+                            <div className="absolute bottom-2 right-2 flex space-x-1">
+                              <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                                participant.mic_enabled !== false ? "bg-green-600" : "bg-red-600"
+                              }`}>
+                                {participant.mic_enabled !== false ? (
+                                  <Mic className="w-3 h-3 text-white" />
+                                ) : (
+                                  <MicOff className="w-3 h-3 text-white" />
+                                )}
+                              </div>
+                              <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                                participant.camera_enabled !== false ? "bg-green-600" : "bg-red-600"
+                              }`}>
+                                {participant.camera_enabled !== false ? (
+                                  <Video className="w-3 h-3 text-white" />
+                                ) : (
+                                  <VideoOff className="w-3 h-3 text-white" />
+                                )}
+                              </div>
+                            </div>
                           </div>
-                          <div
-                            className={`w-6 h-6 rounded-full flex items-center justify-center ${participant.camera_enabled ? "bg-green-600" : "bg-red-600"}`}
-                          >
-                            {participant.camera_enabled ? (
-                              <Video className="w-3 h-3 text-white" />
-                            ) : (
-                              <VideoOff className="w-3 h-3 text-white" />
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                        )
+                      })
+                  })()}
                 </div>
 
-                {/* Controls */}
                 <div className="flex justify-center space-x-4">
                   <Button onClick={toggleMic} variant={micEnabled ? "default" : "destructive"} size="lg">
                     {micEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
@@ -867,17 +892,10 @@ export default function RoomPage() {
                     {cameraEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
                   </Button>
 
-                  {isHost && sessionPhase === "waiting" && (
+                  {isHost && sessionPhase === "waiting" && room && room.participants && room.participants.length > 0 && (
                     <Button onClick={startSession} className="bg-green-600 hover:bg-green-700" size="lg">
                       <Play className="w-5 h-5 mr-2" />
                       Start Session
-                    </Button>
-                  )}
-
-                  {isHost && sessionPhase === "speaking" && (
-                    <Button onClick={endCurrentSpeech} className="bg-orange-600 hover:bg-orange-700" size="lg">
-                      <SkipForward className="w-5 h-5 mr-2" />
-                      Next Speaker
                     </Button>
                   )}
                 </div>
@@ -885,9 +903,7 @@ export default function RoomPage() {
             </Card>
           </div>
 
-          {/* Sidebar */}
           <div className="space-y-6">
-            {/* Room Info */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Room Details</CardTitle>
@@ -910,7 +926,6 @@ export default function RoomPage() {
               </CardContent>
             </Card>
 
-            {/* Speaking Order */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Speaking Order</CardTitle>
@@ -918,11 +933,15 @@ export default function RoomPage() {
               <CardContent>
                 <div className="space-y-2">
                   {room.speaking_order?.map((participantId, index) => {
-                    const participant = room.participants?.find((p) => p && p.id === participantId)
+                    const participant = room.participants?.find((p) => 
+                      p && ((p.user_id && p.user_id === participantId) || (p.id && p.id === participantId))
+                    )
                     const isCurrent = room.current_speaker === participantId
                     const hasSpoken = participant?.has_spoken
 
                     if (!participant) return null
+
+                    const displayName = participant.user_name || participant.name || 'Participant'
 
                     return (
                       <div
@@ -942,7 +961,7 @@ export default function RoomPage() {
                         >
                           {index + 1}
                         </div>
-                        <span className="flex-1">{participant.name}</span>
+                        <span className="flex-1">{displayName}</span>
                         {hasSpoken && (
                           <Badge variant="secondary" className="text-xs">
                             Done
@@ -956,7 +975,6 @@ export default function RoomPage() {
               </CardContent>
             </Card>
 
-            {/* Live Feedback */}
             {(sessionPhase === "speaking" || sessionPhase === "feedback") &&
               room.current_speaker !== currentUser.id && (
                 <Card>
@@ -1006,7 +1024,6 @@ export default function RoomPage() {
                 </Card>
               )}
 
-            {/* Live Feedback Display */}
             {sessionPhase === "speaking" && liveFeedbacks.length > 0 && (
               <Card>
                 <CardHeader>
@@ -1033,7 +1050,6 @@ export default function RoomPage() {
               </Card>
             )}
 
-            {/* Personal Report */}
             {showReport && personalReport && (
               <Card>
                 <CardHeader>
@@ -1044,7 +1060,6 @@ export default function RoomPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
-                    {/* Overall Scores */}
                     <div className="grid grid-cols-3 gap-2 text-center">
                       <div>
                         <div className="text-2xl font-bold text-blue-600">{personalReport.overall_score}</div>
@@ -1060,7 +1075,6 @@ export default function RoomPage() {
                       </div>
                     </div>
 
-                    {/* MediaPipe Analysis */}
                     <div className="bg-blue-50 p-3 rounded-lg">
                       <h4 className="font-medium text-blue-900 mb-2 flex items-center">
                         <Zap className="w-4 h-4 mr-1" />
@@ -1084,7 +1098,6 @@ export default function RoomPage() {
                       </div>
                     </div>
 
-                    {/* Peer Feedback Summary */}
                     <div>
                       <h4 className="font-medium text-gray-900 mb-2">Peer Feedback</h4>
                       <div className="grid grid-cols-3 gap-2 text-center text-sm">
@@ -1107,7 +1120,6 @@ export default function RoomPage() {
                       </div>
                     </div>
 
-                    {/* Strengths */}
                     {personalReport.feedback_summary.strengths.length > 0 && (
                       <div>
                         <h4 className="font-medium text-green-600 mb-2 flex items-center">
@@ -1126,7 +1138,6 @@ export default function RoomPage() {
                       </div>
                     )}
 
-                    {/* Improvement Areas */}
                     {personalReport.feedback_summary.improvement_areas.length > 0 && (
                       <div>
                         <h4 className="font-medium text-orange-600 mb-2 flex items-center">
@@ -1145,7 +1156,6 @@ export default function RoomPage() {
                       </div>
                     )}
 
-                    {/* Key Insights */}
                     {personalReport.insights.length > 0 && (
                       <div>
                         <h4 className="font-medium text-blue-600 mb-2">Key Insights</h4>
@@ -1161,7 +1171,6 @@ export default function RoomPage() {
 
                     <Button
                       onClick={() => {
-                        // Download detailed report
                         const dataStr = JSON.stringify(personalReport, null, 2)
                         const dataUri = "data:application/json;charset=utf-8," + encodeURIComponent(dataStr)
                         const exportFileDefaultName = `speech-report-${new Date().toISOString().split("T")[0]}.json`

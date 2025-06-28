@@ -22,7 +22,9 @@ export interface Room {
 
 export interface Participant {
   id: string
+  user_id?: string  // ADD: Make this optional for backend compatibility
   name: string
+  user_name?: string  // ADD: Make this optional for backend compatibility
   is_host: boolean
   joined_at: string
   camera_enabled: boolean
