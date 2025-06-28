@@ -64,7 +64,11 @@ export default function RoomPage() {
   const [liveFeedbacks, setLiveFeedbacks] = useState<Feedback[]>([])
   const [personalReport, setPersonalReport] = useState<any>(null)
   const [socket, setSocket] = useState<WebSocket | null>(null)
-
+  const [liveMediaPipe, setLiveMediaPipe] = useState({
+  eyeContactPercentage: 0,
+  gestureCount: 0,
+  confidenceScore: 0,
+})
   const localVideoRef = useRef<HTMLVideoElement>(null)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null) // Add this state
 
@@ -417,6 +421,36 @@ export default function RoomPage() {
       mediaPipeAnalyzer.stop()
     }
   }, [id, currentUser.id])
+
+  useEffect(() => {
+  let interval: NodeJS.Timeout | null = null
+  // Only poll if I'm the current speaker and in speaking phase
+  if (room && room.current_speaker === currentUser.id && sessionPhase === "speaking") {
+    interval = setInterval(() => {
+      const analysis = mediaPipeAnalyzer.getCurrentAnalysis()
+      setLiveMediaPipe({
+      eyeContactPercentage: analysis.eyeContactPercentage ?? 0,
+      gestureCount: analysis.gestureCount ?? 0,
+      confidenceScore: analysis.confidenceScore ?? 0,
+    })
+    }, 500)
+  } else {
+    setLiveMediaPipe({
+      eyeContactPercentage: 0,
+      gestureCount: 0,
+      confidenceScore: 0,
+    })
+  }
+  return () => {
+    if (interval) clearInterval(interval)
+  }
+}, [room?.current_speaker, sessionPhase, currentUser.id])
+
+useEffect(() => {
+  if (room && room.current_speaker !== currentUser.id) {
+    mediaPipeAnalyzer.stop()
+  }
+}, [room?.current_speaker, sessionPhase, currentUser.id])
 
   const initializeWebRTC = async () => {
   try {
@@ -835,6 +869,13 @@ const debugWebRTCConnections = () => {
                     <div className="absolute bottom-2 left-2 bg-black/50 text-white px-2 py-1 rounded text-sm">
                       You {room.current_speaker === currentUser.id && sessionPhase === "speaking" && "(Speaking)"}
                     </div>
+                    {room.current_speaker === currentUser.id && sessionPhase === "speaking" && (
+                    <div className="absolute top-2 left-2 bg-black/60 text-white px-3 py-2 rounded text-xs space-y-1 z-10">
+                      <div>👁️ Eye Contact: <span className="font-bold">{liveMediaPipe.eyeContactPercentage}%</span></div>
+                      <div>🤟 Gestures: <span className="font-bold">{liveMediaPipe.gestureCount}</span></div>
+                      <div>💪 Confidence: <span className="font-bold">{liveMediaPipe.confidenceScore}</span></div>
+                    </div>
+                  )}
                     <div className="absolute bottom-2 right-2 flex space-x-1">
                       <div className={`w-6 h-6 rounded-full flex items-center justify-center ${micEnabled ? "bg-green-600" : "bg-red-600"}`}>
                         {micEnabled ? <Mic className="w-3 h-3 text-white" /> : <MicOff className="w-3 h-3 text-white" />}
