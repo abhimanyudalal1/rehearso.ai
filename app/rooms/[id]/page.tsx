@@ -1067,26 +1067,12 @@ const debugWebRTCConnections = () => {
                     <div className="absolute bottom-2 left-2 bg-black/50 text-white px-2 py-1 rounded text-sm">
                       You {room.current_speaker === currentUser.id && sessionPhase === "speaking" && "(Speaking)"}
                     </div>
+                                        <div className="absolute bottom-2 left-2 bg-black/50 text-white px-2 py-1 rounded text-sm">
+                      You {room.current_speaker === currentUser.id && sessionPhase === "speaking" && "(Speaking)"}
+                    </div>
                     {room.current_speaker === currentUser.id && sessionPhase === "speaking" && (
-                      <div className="absolute top-2 left-2 bg-black/60 text-white px-3 py-2 rounded text-xs space-y-1 z-10">
-                        <div>
-                          👁️ Eye Contact:{" "}
-                          <span className="font-bold">
-                            {liveMediaPipe.eyeContactPercentage >= 60 ? "✅" : "❌"}
-                          </span>
-                        </div>
-                        <div>
-                          🤟 Gestures:{" "}
-                          <span className="font-bold">
-                            {liveMediaPipe.gestureCount >= 20 ? "✅" : "❌"}
-                          </span>
-                        </div>
-                        <div>
-                          💪 Confidence:{" "}
-                          <span className="font-bold">
-                            {liveMediaPipe.confidenceScore >= 60 ? "✅" : "❌"}
-                          </span>
-                        </div>
+                      <div className="absolute top-2 left-2 right-2 bg-black/60 text-white px-3 py-2 rounded text-xs max-w-sm z-10">
+                        <div id="camera-feedback" className="leading-tight">Starting analysis...</div>
                       </div>
                     )}
                     <div className="absolute bottom-2 right-2 flex space-x-1">
@@ -1170,224 +1156,7 @@ const debugWebRTCConnections = () => {
     })
                 })()}
                                   </div>
-
-                {/* MediaPipe Analysis for Current Speaker - SIMPLIFIED */}
-                {room.current_speaker === currentUser.id && sessionPhase === "speaking" && (
-                  <div className="mt-6">
-                    {/* Only Camera Feed with Embedded MediaPipe Feedback */}
-                    <Card>
-                      <CardHeader>
-                        <CardTitle>Your Speaking Analysis</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="relative">
-                          {/* Camera Feed */}
-                          <div className="relative aspect-video bg-gray-800 rounded-lg overflow-hidden mb-4">
-                            <video 
-                              ref={localVideoRef} 
-                              autoPlay 
-                              muted 
-                              playsInline 
-                              className="w-full h-full object-cover"
-                              data-testid="local-video"
-                            />
-                            <div className="absolute top-2 left-2 right-2 bg-black bg-opacity-75 text-white p-2 rounded text-sm">
-                              <div id="camera-feedback">Starting analysis...</div>
-                            </div>
-                          </div>
-                          
-                          {/* Hidden iframe for MediaPipe processing */}
-                          <iframe
-                            id="mediapipe-iframe"
-                            srcDoc={`
-                              <!DOCTYPE html>
-                              <html>
-                              <head>
-                                <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-                                <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"></script>
-                                <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js"></script>
-                                <style>
-                                  body { margin: 0; padding: 10px; font-family: Arial, sans-serif; }
-                                  .input_video { display: none; }
-                                  .output_canvas { display: none; }
-                                </style>
-                              </head>
-                              <body>
-                                <video class="input_video" autoplay playsinline></video>
-                                <canvas class="output_canvas" width="640px" height="480px"></canvas>
-                                
-                                <script>
-                                  const videoElement = document.getElementsByClassName('input_video')[0];
-                                  const canvasElement = document.getElementsByClassName('output_canvas')[0];
-                                  const canvasCtx = canvasElement.getContext('2d');
-                                  
-                                  // MediaPipe data tracking (EXACT COPY FROM SOLO)
-                                  let mediaPipeData = {
-                                    goodPostureSeconds: 0,
-                                    handGesturesSeconds: 0,
-                                    speakingSeconds: 0,
-                                    totalFrames: 0,
-                                    goodPostureFrames: 0,
-                                    handGesturesFrames: 0,
-                                    speakingFrames: 0,
-                                    sessionStartTime: Date.now()
-                                  };
-
-                                  // Get camera stream (EXACT COPY FROM SOLO)
-                                  navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-                                    .then(stream => {
-                                      videoElement.srcObject = stream;
-                                      videoElement.onloadedmetadata = () => {
-                                        videoElement.play();
-                                      };
-                                    })
-                                    .catch(err => {
-                                      console.error('Camera access failed:', err);
-                                      updateParentFeedback('❌ Camera access failed');
-                                    });
-
-                                  // Initialize MediaPipe (EXACT COPY FROM SOLO)
-                                  const holistic = new Holistic({
-                                    locateFile: (file) => \`https://cdn.jsdelivr.net/npm/@mediapipe/holistic/\${file}\`
-                                  });
-
-                                  holistic.setOptions({
-                                    modelComplexity: 1,
-                                    smoothLandmarks: true,
-                                    enableSegmentation: false,
-                                    refineFaceLandmarks: true,
-                                    minDetectionConfidence: 0.5,
-                                    minTrackingConfidence: 0.5
-                                  });
-
-                                  // EXACT COPY OF RESULTS PROCESSING FROM SOLO
-                                  holistic.onResults(results => {
-                                    mediaPipeData.totalFrames++;
-                                    
-                                    let feedback = [];
-                                    let goodPosture = false;
-                                    let handGestures = false;
-                                    let speaking = false;
-
-                                    // 1. POSTURE ANALYSIS (EXACT COPY FROM SOLO)
-                                    if (results.poseLandmarks) {
-                                      const leftShoulder = results.poseLandmarks[11];
-                                      const rightShoulder = results.poseLandmarks[12];
-                                      if (leftShoulder && rightShoulder) {
-                                        const shoulderTilt = Math.abs(leftShoulder.y - rightShoulder.y);
-                                        if (shoulderTilt <= 0.05) {
-                                          feedback.push("✅ <strong>Good posture</strong>");
-                                          goodPosture = true;
-                                          mediaPipeData.goodPostureFrames++;
-                                        } else {
-                                          feedback.push("🔴 <strong>Stand upright:</strong> Your shoulders seem tilted");
-                                        }
-                                      } else {
-                                        feedback.push("ℹ️ Stand further back to detect posture");
-                                      }
-                                    } else {
-                                      feedback.push("ℹ️ No pose detected for posture analysis");
-                                    }
-
-                                    // 2. HAND GESTURE ANALYSIS (EXACT COPY FROM SOLO)
-                                    const handsVisible = results.leftHandLandmarks || results.rightHandLandmarks;
-                                    if (handsVisible) {
-                                      feedback.push("✅ <strong>Hands detected:</strong> Good use of gestures");
-                                      handGestures = true;
-                                      mediaPipeData.handGesturesFrames++;
-                                    } else {
-                                      feedback.push("🔴 <strong>Try to use more hand gestures</strong> for expression");
-                                    }
-
-                                    // 3. SPEAKING DETECTION (EXACT COPY FROM SOLO)
-                                    if (results.faceLandmarks && results.faceLandmarks.length > 14) {
-                                      const upperLip = results.faceLandmarks[13];
-                                      const lowerLip = results.faceLandmarks[14];
-                                      if (upperLip && lowerLip) {
-                                        const mouthOpen = (lowerLip.y - upperLip.y) > 0.015;
-                                        if (mouthOpen) {
-                                          feedback.push("✅ <strong>You're likely speaking</strong>");
-                                          speaking = true;
-                                          mediaPipeData.speakingFrames++;
-                                        } else {
-                                          feedback.push("🔴 <strong>Try to speak up</strong> or vary expressions if you're speaking");
-                                        }
-                                      } else {
-                                        feedback.push("ℹ️ No face detected for mouth analysis");
-                                      }
-                                    } else {
-                                      feedback.push("ℹ️ No face detected for mouth analysis");
-                                    }
-
-                                    // Update parent window feedback (EXACT COPY FROM SOLO)
-                                    updateParentFeedback(feedback.join("<br>"));
-                                  });
-
-                                  // Camera initialization (EXACT COPY FROM SOLO)
-                                  const camera = new Camera(videoElement, {
-                                    onFrame: async () => {
-                                      await holistic.send({ image: videoElement });
-                                    },
-                                    width: 640,
-                                    height: 480
-                                  });
-
-                                  // Auto-start camera (EXACT COPY FROM SOLO)
-                                  setTimeout(() => {
-                                    camera.start();
-                                    updateParentFeedback("Analysis started...");
-                                  }, 1000);
-
-                                  // Function to update parent window feedback
-                                  function updateParentFeedback(feedbackText) {
-                                    try {
-                                      const parentFeedback = window.parent.document.getElementById('camera-feedback');
-                                      if (parentFeedback) {
-                                        parentFeedback.innerHTML = feedbackText;
-                                      }
-                                    } catch (e) {
-                                      console.log('Could not update parent feedback:', e);
-                                    }
-                                  }
-                                  
-                                  // Message handler for session data (EXACT COPY FROM SOLO)
-                                  window.addEventListener('message', (event) => {
-                                    if (event.data.action === 'getSessionData') {
-                                      const sessionDuration = (Date.now() - mediaPipeData.sessionStartTime) / 1000;
-                                      const frameRate = 30; // Approximate frame rate
-                                      
-                                      window.parent.postMessage({
-                                        type: 'mediapipeData',
-                                        data: {
-                                          session_duration: sessionDuration,
-                                          good_posture_seconds: (mediaPipeData.goodPostureFrames / frameRate),
-                                          hand_gestures_seconds: (mediaPipeData.handGesturesFrames / frameRate),
-                                          speaking_seconds: (mediaPipeData.speakingFrames / frameRate)
-                                        }
-                                      }, '*');
-                                    }
-                                    
-                                    if (event.data.action === 'startAnalysis') {
-                                      mediaPipeData.sessionStartTime = Date.now();
-                                      mediaPipeData.goodPostureFrames = 0;
-                                      mediaPipeData.handGesturesFrames = 0;
-                                      mediaPipeData.speakingFrames = 0;
-                                      mediaPipeData.totalFrames = 0;
-                                      updateParentFeedback("Analysis restarted...");
-                                    }
-                                  });
-                                </script>
-                              </body>
-                              </html>
-                            `}
-                            className="w-0 h-0 border-0 opacity-0 pointer-events-none"
-                            title="MediaPipe Analysis"
-                          />
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </div>
-                )}
+                
 
                 <div className="flex justify-center space-x-4">
                   <Button onClick={toggleMic} variant={micEnabled ? "default" : "destructive"} size="lg">
@@ -1405,6 +1174,181 @@ const debugWebRTCConnections = () => {
                     </Button>
                   )}
                 </div>
+                {/* Hidden MediaPipe iframe - only processes, doesn't display video */}
+                {room.current_speaker === currentUser.id && sessionPhase === "speaking" && (
+                  <iframe
+                    id="mediapipe-iframe"
+                    srcDoc={`
+                      <!DOCTYPE html>
+                      <html>
+                      <head>
+                        <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+                        <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"></script>
+                        <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js"></script>
+                      </head>
+                      <body>
+                        <video class="input_video" style="display: none;" autoplay playsinline></video>
+                        <canvas class="output_canvas" style="display: none;" width="640px" height="480px"></canvas>
+                        
+                        <script>
+                          const videoElement = document.getElementsByClassName('input_video')[0];
+                          const canvasElement = document.getElementsByClassName('output_canvas')[0];
+                          const canvasCtx = canvasElement.getContext('2d');
+                          
+                          // MediaPipe data tracking
+                          let mediaPipeData = {
+                            goodPostureFrames: 0,
+                            handGesturesFrames: 0,
+                            speakingFrames: 0,
+                            totalFrames: 0,
+                            sessionStartTime: Date.now()
+                          };
+
+                          // Get camera stream
+                          navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+                            .then(stream => {
+                              videoElement.srcObject = stream;
+                              videoElement.onloadedmetadata = () => {
+                                videoElement.play();
+                              };
+                            })
+                            .catch(err => {
+                              console.error('Camera access failed:', err);
+                              updateParentFeedback('❌ Camera access failed');
+                            });
+
+                          // Initialize MediaPipe
+                          const holistic = new Holistic({
+                            locateFile: (file) => \`https://cdn.jsdelivr.net/npm/@mediapipe/holistic/\${file}\`
+                          });
+
+                          holistic.setOptions({
+                            modelComplexity: 1,
+                            smoothLandmarks: true,
+                            enableSegmentation: false,
+                            refineFaceLandmarks: true,
+                            minDetectionConfidence: 0.5,
+                            minTrackingConfidence: 0.5
+                          });
+
+                          // Real-time analysis processing
+                          holistic.onResults(results => {
+                            mediaPipeData.totalFrames++;
+                            
+                            let feedback = [];
+
+                            // 1. POSTURE ANALYSIS
+                            if (results.poseLandmarks) {
+                              const leftShoulder = results.poseLandmarks[11];
+                              const rightShoulder = results.poseLandmarks[12];
+                              if (leftShoulder && rightShoulder) {
+                                const shoulderTilt = Math.abs(leftShoulder.y - rightShoulder.y);
+                                if (shoulderTilt <= 0.05) {
+                                  feedback.push("<strong>Posture:</strong> ✅");
+                                  mediaPipeData.goodPostureFrames++;
+                                } else {
+                                  feedback.push("<strong>Posture:</strong> 🔴");
+                                }
+                              } else {
+                                feedback.push("ℹ️ Stand further back to detect posture");
+                              }
+                            } else {
+                              feedback.push("ℹ️ No pose detected for posture analysis");
+                            }
+
+                            // 2. HAND GESTURE ANALYSIS
+                            const handsVisible = results.leftHandLandmarks || results.rightHandLandmarks;
+                            if (handsVisible) {
+                              feedback.push("<strong>Hand Gesture:</strong> ✅ ");
+                              mediaPipeData.handGesturesFrames++;
+                            } else {
+                              feedback.push("<strong>Hand Gesture:</strong> 🔴");
+                            }
+
+                            // 3. SPEAKING DETECTION
+                            if (results.faceLandmarks && results.faceLandmarks.length > 14) {
+                              const upperLip = results.faceLandmarks[13];
+                              const lowerLip = results.faceLandmarks[14];
+                              if (upperLip && lowerLip) {
+                                const mouthOpen = (lowerLip.y - upperLip.y) > 0.015;
+                                if (mouthOpen) {
+                                  feedback.push("<strong>Speaking:</strong> ✅ ");
+                                  mediaPipeData.speakingFrames++;
+                                } else {
+                                  feedback.push("<strong>Speaking:</strong> 🔴");
+                                }
+                              } else {
+                                feedback.push("ℹ️ No face detected for mouth analysis");
+                              }
+                            } else {
+                              feedback.push("ℹ️ No face detected for mouth analysis");
+                            }
+
+                            // Update parent window feedback
+                            updateParentFeedback(feedback.join("<br>"));
+                          });
+
+                          // Camera initialization
+                          const camera = new Camera(videoElement, {
+                            onFrame: async () => {
+                              await holistic.send({ image: videoElement });
+                            },
+                            width: 640,
+                            height: 480
+                          });
+
+                          // Auto-start camera
+                          setTimeout(() => {
+                            camera.start();
+                            updateParentFeedback("Analysis started...");
+                          }, 1000);
+
+                          // Function to update parent window feedback
+                          function updateParentFeedback(feedbackText) {
+                            try {
+                              const parentFeedback = window.parent.document.getElementById('camera-feedback');
+                              if (parentFeedback) {
+                                parentFeedback.innerHTML = feedbackText;
+                              }
+                            } catch (e) {
+                              console.log('Could not update parent feedback:', e);
+                            }
+                          }
+                          
+                          // Message handlers for session data
+                          window.addEventListener('message', (event) => {
+                            if (event.data.action === 'getSessionData') {
+                              const sessionDuration = (Date.now() - mediaPipeData.sessionStartTime) / 1000;
+                              const frameRate = 30;
+                              
+                              window.parent.postMessage({
+                                type: 'mediapipeData',
+                                data: {
+                                  session_duration: sessionDuration,
+                                  good_posture_seconds: (mediaPipeData.goodPostureFrames / frameRate),
+                                  hand_gestures_seconds: (mediaPipeData.handGesturesFrames / frameRate),
+                                  speaking_seconds: (mediaPipeData.speakingFrames / frameRate)
+                                }
+                              }, '*');
+                            }
+                            
+                            if (event.data.action === 'startAnalysis') {
+                              mediaPipeData.sessionStartTime = Date.now();
+                              mediaPipeData.goodPostureFrames = 0;
+                              mediaPipeData.handGesturesFrames = 0;
+                              mediaPipeData.speakingFrames = 0;
+                              mediaPipeData.totalFrames = 0;
+                              updateParentFeedback("Analysis restarted...");
+                            }
+                          });
+                        </script>
+                      </body>
+                      </html>
+                    `}
+                    className="w-0 h-0 border-0 opacity-0 pointer-events-none"
+                    title="MediaPipe Analysis"
+                  />
+                )}
               </CardContent>
             </Card>
           </div>
