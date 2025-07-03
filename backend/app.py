@@ -98,7 +98,7 @@ class ConnectionManager:
     async def disconnect(self, websocket: WebSocket):
         try:
             self.active_connections.remove(websocket)
-            
+             
         except ValueError:
             pass
             
@@ -208,7 +208,7 @@ async def websocket_endpoint(websocket: WebSocket):
             except WebSocketDisconnect:
                 await manager.disconnect(websocket)
                 break
-            except Exception as e:
+            except Exception as e: 
                 print(f"Error: {str(e)}")
                 break
     finally:
@@ -433,7 +433,7 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
                         "to": message.get("to"),
                         "candidate": message["candidate"]
                     }, exclude=websocket)
-
+ 
                 elif message["type"] == "start_session":
                     print(f"🎬 Starting session for room {room_id}")
                     if room_id in active_rooms:
@@ -471,10 +471,12 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
                         })
 
                 elif message["type"] == "speaker_finished":
-                    print(f"🏁 Speaker finished for room {room_id}")
+                    print(f"🏁 Speaker finished message received for room {room_id}")
+                    print(f"📝 Current speaker being marked as finished: {message.get('participant_id')}")
+                    
                     if room_id in active_rooms:
                         room = active_rooms[room_id]
-                        current_speaker = room["current_speaker"]
+                        current_speaker = message.get("participant_id") or room["current_speaker"]
                         
                         print(f"📝 Marking speaker {current_speaker} as finished")
                         
@@ -482,10 +484,14 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
                         for participant in room["participants"]:
                             if participant["user_id"] == current_speaker:
                                 participant["has_spoken"] = True
+                                print(f"✅ Marked {current_speaker} as has_spoken=True")
                                 break
                         
                         # Move to next speaker
                         speaking_order = room.get("speaking_order", [])
+                        print(f"📋 Speaking order: {speaking_order}")
+                        print(f"📍 Current speaker index: {speaking_order.index(current_speaker) if current_speaker in speaking_order else 'NOT FOUND'}")
+                        
                         if current_speaker in speaking_order:
                             current_index = speaking_order.index(current_speaker)
                             
@@ -503,13 +509,18 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
                                 })
                             else:
                                 # All speakers done
-                                print("🎉 All speakers completed")
+                                print("🎉 All speakers completed - session ending")
                                 room["status"] = "completed"
                                 room["current_speaker"] = None
                                 await broadcast_to_room(room_id, {
                                     "type": "session_completed",
                                     "room": room
                                 })
+                        else:
+                            print(f"❌ ERROR: Current speaker {current_speaker} not found in speaking order!")
+                    else:
+                        print(f"❌ ERROR: Room {room_id} not found in active_rooms!")
+
                 elif message["type"] == "next_speaker":
                     if room_id in active_rooms:
                         room = active_rooms[room_id]

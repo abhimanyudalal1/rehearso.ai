@@ -82,7 +82,7 @@ export default function RoomPage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [participantReports, setParticipantReports] = useState<Map<string, any>>(new Map())
   const [liveFeedbackForSpeaker, setLiveFeedbackForSpeaker] = useState<string[]>([])
-
+  const [speakingTimer, setSpeakingTimer] = useState<NodeJS.Timeout | null>(null) // Add this line
   const remoteVideosRef = useRef<Map<string, HTMLVideoElement>>(new Map())
   
   // Add message listener for MediaPipe data
@@ -386,50 +386,82 @@ export default function RoomPage() {
 
             case "speaking_started":
               console.log("📍 Speaking phase started - received from backend")
+              console.log("📍 Current speaker from message:", message.room.current_speaker)
+              console.log("📍 Room time per speaker:", message.room.time_per_speaker)
+              
+              // CRITICAL: Update room state FIRST
               setRoom(message.room)
               setSessionPhase("speaking")
               setPreparationTime(0)
               
-              // Start speaking timer for current speaker
-              if (message.room.current_speaker) {
-                console.log(`📍 Starting speaking for: ${message.room.current_speaker}`)
-                startSpeaking(message.room.current_speaker)
-              }
-              break
-
-            case "speaker_changed":
-              console.log("📍 Speaker changed, new preparation phase")
-              setRoom(message.room)
-              setSessionPhase("preparation")
-              
-              // 30 seconds prep for next speaker
-              console.log("📍 Starting 30-second next speaker preparation")
-              let nextCountdown = 30
-              setPreparationTime(nextCountdown)
-              
-              const nextTimerInterval = setInterval(() => {
-                nextCountdown -= 1
-                setPreparationTime(nextCountdown)
-                console.log(`📍 Next speaker prep: ${nextCountdown} seconds remaining`)
+              // FIXED: Start timer with room data from message (not state)
+              if (message.room.current_speaker && message.room.time_per_speaker) {
+                console.log(`📍 Starting speaking timer for: ${message.room.current_speaker}`)
+                console.log(`📍 Timer duration: ${message.room.time_per_speaker} minutes`)
                 
-                if (nextCountdown <= 0) {
-                  clearInterval(nextTimerInterval)
-                  console.log("📍 Next speaker preparation complete!")
-                  
-                  // ONLY NEW CURRENT SPEAKER SENDS preparation_complete
-                  if (message.room.current_speaker === currentUser.id) {
-                    console.log("📍 I'm the new current speaker, sending preparation_complete")
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        type: "preparation_complete",
-                        room_id: message.room.id
-                      }))
-                    }
-                  } else {
-                    console.log("📍 I'm not the new speaker, waiting")
-                  }
+                // Use room data from message directly, not from state
+                const speakingTimeSeconds = message.room.time_per_speaker * 60
+                setTimeRemaining(speakingTimeSeconds)
+                
+                // Clear any existing timer
+                if (speakingTimer) {
+                  clearInterval(speakingTimer)
+                  setSpeakingTimer(null)
                 }
-              }, 1000)
+                
+                // Initialize MediaPipe for current speaker
+                if (message.room.current_speaker === currentUser.id) {
+                  console.log("🎥 Current user is speaking - initializing MediaPipe")
+                  setTimeout(() => {
+                    initializeMediaPipeForSpeaker()
+                  }, 2000)
+                } else {
+                  console.log("👁️ Current user is not speaking - will watch")
+                }
+                
+                // Start countdown timer
+                // Start countdown timer
+                const newTimer = setInterval(() => {
+                  setTimeRemaining((prevTime) => {
+                    const newTime = prevTime - 1
+                    console.log(`⏰ Speaking time remaining: ${newTime} seconds`)
+                    
+                    if (newTime <= 0) {
+                      console.log("⏰ Speaking time ended, finishing speech")
+                      clearInterval(newTimer)
+                      setSpeakingTimer(null)
+                      
+                      // Only current speaker sends finished message
+                      if (message.room.current_speaker === currentUser.id) {
+                        console.log("📤 Current user finishing speech, sending message")
+                        setTimeout(() => {
+                          // FIX: Use ws instead of socket here!
+                          if (ws && ws.readyState === WebSocket.OPEN) {
+                            console.log("📤 About to send speaker_finished message via ws")
+                            const finishedMessage = {
+                              type: "speaker_finished",
+                              participant_id: message.room.current_speaker,
+                              room_id: message.room.id
+                            }
+                            console.log("📤 Message being sent:", finishedMessage)
+                            ws.send(JSON.stringify(finishedMessage))
+                          } else {
+                            console.error("❌ WebSocket ws not available for speaker_finished message")
+                            console.error("❌ ws state:", ws?.readyState)
+                          }
+                        }, 100)
+                      }
+                      return 0
+                    }
+                    return newTime
+                  })
+                }, 1000)
+                
+                setSpeakingTimer(newTimer)
+                console.log("✅ Speaking timer started successfully")
+              } else {
+                console.error("❌ Missing speaker or time data in speaking_started message")
+              }
               break
             case "session_completed":
               console.log("📍 Session completed")
@@ -467,6 +499,43 @@ export default function RoomPage() {
                 console.log("✅ Processing ICE candidate from:", message.from)
                 webrtcService.handleIceCandidate(message.from, message.candidate)
               }
+              break
+            case "speaker_changed":
+              console.log("📍 Speaker changed - new preparation phase")
+              console.log("📍 New current speaker:", message.room.current_speaker)
+              console.log("📍 Previous speaker should have finished")
+              
+              setRoom(message.room)
+              setSessionPhase("preparation")
+              
+              // 30 seconds prep for next speaker
+              console.log("📍 Starting 30-second next speaker preparation")
+              let nextCountdown = 30
+              setPreparationTime(nextCountdown)
+              
+              const nextTimerInterval = setInterval(() => {
+                nextCountdown -= 1
+                setPreparationTime(nextCountdown)
+                console.log(`📍 Next speaker prep: ${nextCountdown} seconds remaining`)
+                
+                if (nextCountdown <= 0) {
+                  clearInterval(nextTimerInterval)
+                  console.log("📍 Next speaker preparation complete!")
+                  
+                  // ONLY NEW CURRENT SPEAKER SENDS preparation_complete
+                  if (message.room.current_speaker === currentUser.id) {
+                    console.log("📍 I'm the new current speaker, sending preparation_complete")
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                      ws.send(JSON.stringify({
+                        type: "preparation_complete",
+                        room_id: message.room.id
+                      }))
+                    }
+                  } else {
+                    console.log("📍 I'm not the new speaker, waiting")
+                  }
+                }
+              }, 1000)
               break
 
             default:
@@ -523,7 +592,10 @@ export default function RoomPage() {
     return () => {
       isCleanedUp = true
       console.log("🧹 Cleaning up room connection")
-      
+      if (speakingTimer) {
+        clearInterval(speakingTimer)
+        setSpeakingTimer(null)
+      }
       if (currentSocket) {
         if (currentSocket.readyState === WebSocket.OPEN) {
           currentSocket.close(1000, "Component unmounting")
@@ -780,60 +852,37 @@ useEffect(() => {
     setCurrentTopic(randomTopic)
   }
 
-    const startSpeaking = (participantId?: string) => {
+  const startSpeaking = (participantId?: string) => {
     if (!room) return
 
     const speakerId = participantId || room.current_speaker
-    console.log(`🎤 Starting speaking session for: ${speakerId}`)
-    console.log(`🆔 Current user ID: ${currentUser.id}`)
-    console.log(`🎯 Is current user speaking: ${speakerId === currentUser.id}`)
+    console.log(`🎤 Manual start speaking called for: ${speakerId}`)
     
-    setSessionPhase("speaking")
-    setTimeRemaining(room.time_per_speaker * 60)
-    
-    // Initialize MediaPipe for current speaker
+    // This function is now mainly for MediaPipe initialization
     if (speakerId === currentUser.id) {
-      console.log("🎥 Current user is speaking - initializing MediaPipe")
-      
-      // Small delay to ensure DOM is ready
+      console.log("🎥 Initializing MediaPipe for manual start")
       setTimeout(() => {
         initializeMediaPipeForSpeaker()
-      }, 2000)
-    } else {
-      console.log("👁️ Current user is not speaking - will watch")
+      }, 1000)
     }
-    
-    // Start timer countdown
-    const speakTimer = setInterval(() => {
-      setTimeRemaining((prev) => {
-        if (prev <= 1) {
-          clearInterval(speakTimer)
-          console.log("⏰ Speaking time ended, finishing speech")
-          endCurrentSpeech()
-          return 0
-        }
-        return prev - 1
-      })
-    }, 1000)
   }
 
-    const endCurrentSpeech = async () => {
+  const endCurrentSpeech = async () => {
     if (!room) return
 
-    console.log(`🏁 Ending speech for: ${room.current_speaker}`)
+    console.log(`🏁 Manual end speech called for: ${room.current_speaker}`)
     
     // Stop MediaPipe analysis and generate report
     await stopMediaPipeAnalysis()
     
-    // FIX: Use the actual socket from state (this one is correct)
-    if (socket && socket.readyState === WebSocket.OPEN) {
+    // Send speaker finished message
+    if (room.current_speaker === currentUser.id && socket && socket.readyState === WebSocket.OPEN) {
+      console.log("📤 Sending speaker_finished message manually")
       socket.send(JSON.stringify({
         type: "speaker_finished",
         participant_id: room.current_speaker,
         room_id: room.id
       }))
-    } else {
-      console.error("❌ Socket not available in endCurrentSpeech")
     }
 
     setTimeRemaining(0)
@@ -870,14 +919,15 @@ const debugWebRTCConnections = () => {
     return () => clearInterval(interval)
   }, [currentUserId, room])
 
-    // Debug preparation phase
+  // Debug timer and session state
   useEffect(() => {
-    if (sessionPhase === "preparation") {
-      console.log(`📍 PREPARATION PHASE: ${preparationTime} seconds remaining`)
-      console.log(`📍 Current speaker: ${room?.current_speaker}`)
-      console.log(`📍 Socket connected: ${socket?.readyState === WebSocket.OPEN}`)
-    }
-  }, [preparationTime, sessionPhase])
+    console.log(`📍 TIMER DEBUG:`)
+    console.log(`   - Session Phase: ${sessionPhase}`)
+    console.log(`   - Time Remaining: ${timeRemaining}`)
+    console.log(`   - Current Speaker: ${room?.current_speaker}`)
+    console.log(`   - Is Current User: ${room?.current_speaker === currentUser.id}`)
+    console.log(`   - Timer Running: ${!!speakingTimer}`)
+  }, [sessionPhase, timeRemaining, room?.current_speaker, speakingTimer])
 
   const sendFeedback = () => {
     if (!room || !feedbackMessage.trim() || !socket) return
