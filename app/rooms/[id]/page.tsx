@@ -976,54 +976,7 @@ const debugWebRTCConnections = () => {
       <div className="container mx-auto px-4 py-6">
         <div className="grid lg:grid-cols-4 gap-6">
           <div className="lg:col-span-3">
-            {sessionPhase === "preparation" && (
-              <Card className="mb-6">
-                <CardContent className="text-center py-8">
-                  <div className="mb-8">
-                    <Badge className="mb-4 bg-orange-100 text-orange-700">Preparation Time</Badge>
-                    <div className="text-6xl font-bold text-orange-600 mb-4">{formatTime(preparationTime)}</div>
-                    <div className="w-full max-w-md mx-auto bg-gray-200 rounded-full h-3 mb-6">
-                      <div 
-                        className="bg-orange-600 h-3 rounded-full transition-all duration-1000" 
-                        style={{width: `${Math.max(0, 100 - (preparationTime / 60) * 100)}%`}}
-                      ></div>
-                    </div>
-                    <h2 className="text-2xl font-bold mb-4">
-                      {room?.current_speaker === currentUser.id 
-                        ? "Get Ready - You're Speaking Next!" 
-                        : `${room?.participants.find(p => p.user_id === room?.current_speaker)?.user_name || 'Someone'} is preparing to speak`}
-                    </h2>
-                  </div>
-
-                  {/* Topic Display */}
-                  {currentTopic && (
-                    <Card className="max-w-2xl mx-auto">
-                      <CardHeader>
-                        <CardTitle>Speaking Topic</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-6 rounded-lg">
-                          <p className="text-lg font-medium text-gray-800">{currentTopic}</p>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  )}
-
-                  {/* Preparation Tips */}
-                  <Card className="max-w-2xl mx-auto mt-4">
-                    <CardContent className="pt-6">
-                      <h3 className="font-semibold mb-3">Quick Preparation Tips:</h3>
-                      <ul className="text-sm text-gray-600 space-y-1">
-                        <li>• Think of 2-3 main points to cover</li>
-                        <li>• Plan your opening and closing statements</li>
-                        <li>• Take deep breaths and stay calm</li>
-                        <li>• Check your camera and microphone</li>
-                      </ul>
-                    </CardContent>
-                  </Card>
-                </CardContent>
-              </Card>
-            )}
+            
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
@@ -1033,7 +986,6 @@ const debugWebRTCConnections = () => {
                   </CardTitle>
 
                          
-        
 
                   {sessionPhase === "speaking" && (
                     <div className="flex items-center space-x-2 text-red-600">
@@ -1085,79 +1037,105 @@ const debugWebRTCConnections = () => {
                     </div>
                   </div>
 
-{room.participants && room.participants.length > 0 && (() => {
-  // Use currentUserId from state, which is set from the backend
-  return room.participants
-    .filter((p) => {
-      if (!p || !(p.user_id || p.id)) return false
-      const participantId = p.user_id || p.id
-      // Only filter out the participant whose ID matches currentUserId
-      return participantId !== currentUserId
-    })
-    .slice(0, 7)
-    .map((participant) => {
-      const participantId = participant.user_id || participant.id
-      const participantName = participant.user_name || participant.name || 'Participant'
-      return (
-        <div
-          key={`remote-${participantId}`}
-          className="relative aspect-video bg-gray-800 rounded-lg overflow-hidden"
-        >
-          <video
-            ref={(el) => {
-              if (el && participantId) {
-                el.setAttribute('data-peer-id', participantId)
-                el.muted = true // <-- Add this to allow autoplay
-                remoteVideosRef.current.set(participantId, el)
-                const existingStream = webrtcService.getCallState().remoteStreams.get(participantId)
-                // Only assign if not already set
-                if (existingStream && el.srcObject !== existingStream) {
-                  el.srcObject = existingStream
-                  el.play().catch(error => {
-                    console.error("❌ Error playing existing stream:", error)
-                  })
-                }
-              }
-            }}
-            autoPlay
-            playsInline
-            className="w-full h-full object-cover"
-            data-peer-id={participantId}
-          />
-          {/* Show a message if no stream */}
-          
-          <div className="absolute bottom-2 left-2 bg-black/50 text-white px-2 py-1 rounded text-sm">
-            {participantName}{" "}
-            {room.current_speaker === participantId && sessionPhase === "speaking" && "(Speaking)"}
-            {participant.is_host && " (Host)"}
-          </div>
-          <div className="absolute bottom-2 right-2 flex space-x-1">
-            <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
-              participant.mic_enabled !== false ? "bg-green-600" : "bg-red-600"
-            }`}>
-              {participant.mic_enabled !== false ? (
-                <Mic className="w-3 h-3 text-white" />
-              ) : (
-                <MicOff className="w-3 h-3 text-white" />
-              )}
-            </div>
-            <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
-              participant.camera_enabled !== false ? "bg-green-600" : "bg-red-600"
-            }`}>
-              {participant.camera_enabled !== false ? (
-                <Video className="w-3 h-3 text-white" />
-              ) : (
-                <VideoOff className="w-3 h-3 text-white" />
-              )}
-            </div>
-          </div>
-        </div>
-      )
-    })
-                })()}
-                                  </div>
+                  {room.participants && room.participants.length > 0 && (() => {
+                    // Use currentUserId from state, which is set from the backend
+                    return room.participants
+                      .filter((p) => {
+                        if (!p || !(p.user_id || p.id)) return false
+                        const participantId = p.user_id || p.id
+                        // Only filter out the participant whose ID matches currentUserId
+                        return participantId !== currentUserId
+                      })
+                      .slice(0, 7)
+                      .map((participant) => {
+                        const participantId = participant.user_id || participant.id
+                        const participantName = participant.user_name || participant.name || 'Participant'
+                        return (
+                          <div
+                            key={`remote-${participantId}`}
+                            className="relative aspect-video bg-gray-800 rounded-lg overflow-hidden"
+                          >
+                            <video
+                              ref={(el) => {
+                                if (el && participantId) {
+                                  el.setAttribute('data-peer-id', participantId)
+                                  el.muted = true // <-- Add this to allow autoplay
+                                  remoteVideosRef.current.set(participantId, el)
+                                  const existingStream = webrtcService.getCallState().remoteStreams.get(participantId)
+                                  // Only assign if not already set
+                                  if (existingStream && el.srcObject !== existingStream) {
+                                    el.srcObject = existingStream
+                                    el.play().catch(error => {
+                                      console.error("❌ Error playing existing stream:", error)
+                                    })
+                                  }
+                                }
+                              }}
+                              autoPlay
+                              playsInline
+                              className="w-full h-full object-cover"
+                              data-peer-id={participantId}
+                            />
+                            {/* Show a message if no stream */}
+                            
+                            <div className="absolute bottom-2 left-2 bg-black/50 text-white px-2 py-1 rounded text-sm">
+                              {participantName}{" "}
+                              {room.current_speaker === participantId && sessionPhase === "speaking" && "(Speaking)"}
+                              {participant.is_host && " (Host)"}
+                            </div>
+                            <div className="absolute bottom-2 right-2 flex space-x-1">
+                              <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                                participant.mic_enabled !== false ? "bg-green-600" : "bg-red-600"
+                              }`}>
+                                {participant.mic_enabled !== false ? (
+                                  <Mic className="w-3 h-3 text-white" />
+                                ) : (
+                                  <MicOff className="w-3 h-3 text-white" />
+                                )}
+                              </div>
+                              <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                                participant.camera_enabled !== false ? "bg-green-600" : "bg-red-600"
+                              }`}>
+                                {participant.camera_enabled !== false ? (
+                                  <Video className="w-3 h-3 text-white" />
+                                ) : (
+                                  <VideoOff className="w-3 h-3 text-white" />
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })
+                    })()
+                  }
+                </div>
                 
+                {/* ADD PREPARATION PHASE HERE - BELOW THE VIDEO GRID */}
+                {sessionPhase === "preparation" && (
+                  <Card className="mb-6">
+                    <CardContent className="text-center py-8">
+                      <div className="mb-8">
+                        <Badge className="mb-4 bg-orange-100 text-orange-700">Preparation Time</Badge>
+                        <div className="text-6xl font-bold text-orange-600 mb-4">{formatTime(preparationTime)}</div>
+                        <div className="w-full max-w-md mx-auto bg-gray-200 rounded-full h-3 mb-6">
+                          <div 
+                            className="bg-orange-600 h-3 rounded-full transition-all duration-1000" 
+                            style={{width: `${Math.max(0, 100 - (preparationTime / 60) * 100)}%`}}
+                          ></div>
+                        </div>
+                        <h2 className="text-2xl font-bold mb-4">
+                          {room?.current_speaker === currentUser.id 
+                            ? "Get Ready - You're Speaking Next!" 
+                            : `${room?.participants.find(p => p.user_id === room?.current_speaker)?.user_name || 'Someone'} is preparing to speak`}
+                          </h2>
+                      </div>
 
+                      
+
+                      
+                    </CardContent>
+                  </Card>
+                )}
                 <div className="flex justify-center space-x-4">
                   <Button onClick={toggleMic} variant={micEnabled ? "default" : "destructive"} size="lg">
                     {micEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
@@ -1352,6 +1330,8 @@ const debugWebRTCConnections = () => {
               </CardContent>
             </Card>
           </div>
+
+          
 
           <div className="space-y-6">
             <Card>
