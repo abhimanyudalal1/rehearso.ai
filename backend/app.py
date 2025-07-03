@@ -369,8 +369,8 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
                     participant_added = True
                     print(f"✅ Added participant {user_id} to room {room_id}. Total: {len(room['participants'])}")
                     await broadcast_to_room(room_id, {
-                        "type": "participant_joined",
-                        "room": room,
+                        "type": "participant_joined",   
+                        "room": room,  
                         "new_participant": participant
                     }, exclude=websocket)
                 else:
@@ -383,7 +383,7 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
 
             }))
         # Message handling loop
-        while True:
+        while True: 
             try:
                 data = await websocket.receive_text()
                 message = json.loads(data)
@@ -423,7 +423,7 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
                         "to": message.get("to"),
                         "answer": message["answer"]
                     }, exclude=websocket)
-                    
+                 
                 elif message["type"] == "webrtc_ice_candidate":
                     print(f"🧊 ICE candidate from {user_id} to {message.get('to', 'broadcast')}")
                     print(f"   Forwarding to room {room_id}")
@@ -433,7 +433,9 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
                         "to": message.get("to"),
                         "candidate": message["candidate"]
                     }, exclude=websocket)
+
                 elif message["type"] == "start_session":
+                    print(f"🎬 Starting session for room {room_id}")
                     if room_id in active_rooms:
                         room = active_rooms[room_id]
                         room["status"] = "active"
@@ -444,11 +446,91 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
                         random.shuffle(participants)
                         room["speaking_order"] = [p["user_id"] for p in participants]
                         room["current_speaker"] = room["speaking_order"][0] if participants else None
+                        room["preparation_time"] = 60  # Add preparation time
+                        
+                        print(f"🎯 Speaking order: {room['speaking_order']}")
+                        print(f"🎤 First speaker: {room['current_speaker']}")
                         
                     await broadcast_to_room(room_id, {
                         "type": "session_started",
                         "room": active_rooms[room_id]
                     })
+
+                elif message["type"] == "preparation_complete":
+                    print(f"✅ Preparation complete for room {room_id}")
+                    if room_id in active_rooms:
+                        room = active_rooms[room_id]
+                        room["status"] = "speaking"
+                        
+                        print(f"🎤 Starting speaking phase for: {room['current_speaker']}")
+                        
+                        await broadcast_to_room(room_id, {
+                            "type": "speaking_started",
+                            "room": room,
+                            "current_speaker": room["current_speaker"]
+                        })
+
+                elif message["type"] == "speaker_finished":
+                    print(f"🏁 Speaker finished for room {room_id}")
+                    if room_id in active_rooms:
+                        room = active_rooms[room_id]
+                        current_speaker = room["current_speaker"]
+                        
+                        print(f"📝 Marking speaker {current_speaker} as finished")
+                        
+                        # Mark current speaker as finished
+                        for participant in room["participants"]:
+                            if participant["user_id"] == current_speaker:
+                                participant["has_spoken"] = True
+                                break
+                        
+                        # Move to next speaker
+                        speaking_order = room.get("speaking_order", [])
+                        if current_speaker in speaking_order:
+                            current_index = speaking_order.index(current_speaker)
+                            
+                            if current_index < len(speaking_order) - 1:
+                                # Next speaker
+                                next_speaker = speaking_order[current_index + 1]
+                                room["current_speaker"] = next_speaker
+                                
+                                print(f"➡️ Moving to next speaker: {next_speaker}")
+                                
+                                await broadcast_to_room(room_id, {
+                                    "type": "speaker_changed",
+                                    "room": room,
+                                    "next_speaker": room["current_speaker"]
+                                })
+                            else:
+                                # All speakers done
+                                print("🎉 All speakers completed")
+                                room["status"] = "completed"
+                                room["current_speaker"] = None
+                                await broadcast_to_room(room_id, {
+                                    "type": "session_completed",
+                                    "room": room
+                                })
+                elif message["type"] == "next_speaker":
+                    if room_id in active_rooms:
+                        room = active_rooms[room_id]
+                        speaking_order = room.get("speaking_order", [])
+                        current_speaker = room.get("current_speaker")
+                        
+                        if current_speaker and current_speaker in speaking_order:
+                            current_index = speaking_order.index(current_speaker)
+                            if current_index < len(speaking_order) - 1:
+                                room["current_speaker"] = speaking_order[current_index + 1]
+                                await broadcast_to_room(room_id, {
+                                    "type": "speaker_changed",
+                                    "room": room
+                                })
+                            else:
+                                room["status"] = "completed"
+                                room["current_speaker"] = None
+                                await broadcast_to_room(room_id, {
+                                    "type": "session_completed",
+                                    "room": room
+                                })
                     
                 elif message["type"] == "send_feedback":
                     if room_id in active_rooms:
@@ -457,7 +539,7 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
                         active_rooms[room_id]["feedbacks"].append(message["feedback"])
                     
                     await broadcast_to_room(room_id, message, exclude=websocket)
-                    
+                
                 elif message["type"] == "toggle_camera":
                     if room_id in active_rooms:
                         room = active_rooms[room_id]
@@ -465,7 +547,7 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
                             if participant["user_id"] == message["participant_id"]:
                                 participant["camera_enabled"] = message["camera_enabled"]
                                 break
-                    
+                
                     await broadcast_to_room(room_id, {
                         "type": "participant_updated",
                         "room": active_rooms[room_id]
@@ -538,3 +620,78 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
                 
         except Exception as cleanup_error:
             print(f"⚠️ Cleanup error for {user_id}: {cleanup_error}")
+
+@app.post("/submit-group-member-data")
+async def submit_group_member_data(request: Request):
+    try:
+        data = await request.json()
+        
+        # Extract data
+        participant_id = data["participant_id"]
+        room_id = data["room_id"]
+        mediapipe_data = data["mediapipe_data"]
+        peer_feedbacks = data.get("peer_feedbacks", [])
+        
+        # Calculate MediaPipe scores
+        session_duration = mediapipe_data["session_duration"]
+        posture_score = round((mediapipe_data["good_posture_seconds"] / session_duration) * 100, 1)
+        gesture_score = round((mediapipe_data["hand_gestures_seconds"] / session_duration) * 100, 1)
+        speaking_score = round((mediapipe_data["speaking_seconds"] / session_duration) * 100, 1)
+        
+        # Calculate peer feedback score
+        if peer_feedbacks:
+            positive_count = sum(1 for f in peer_feedbacks if f.get("type") == "positive")
+            total_feedbacks = len(peer_feedbacks)
+            peer_score = (positive_count / total_feedbacks) * 100 if total_feedbacks > 0 else 50
+        else:
+            peer_score = 50
+        
+        # Weighted overall score (70% MediaPipe + 30% Peer Feedback)
+        overall_score = round((posture_score + gesture_score + speaking_score) * 0.7 / 3 + peer_score * 0.3, 1)
+        
+        # Generate AI report
+        feedback_text = " ".join([f.get("message", "") for f in peer_feedbacks])
+        
+        report_prompt = f"""
+        Analyze this group presentation performance:
+        
+        Speaker Duration: {session_duration} seconds
+        Posture Quality: {posture_score}% ({mediapipe_data["good_posture_seconds"]}s good posture)
+        Hand Gestures: {gesture_score}% ({mediapipe_data["hand_gestures_seconds"]}s with gestures)
+        Speaking Activity: {speaking_score}% ({mediapipe_data["speaking_seconds"]}s speaking)
+        
+        Peer Feedback ({len(peer_feedbacks)} comments):
+        {feedback_text}
+        
+        Provide a comprehensive assessment including:
+        1. Performance summary
+        2. Strengths based on MediaPipe and peer feedback
+        3. Areas for improvement
+        4. Specific recommendations
+        5. How peer feedback aligns with technical analysis
+        """
+        
+        llm = get_llm()
+        chain = ChatPromptTemplate.from_template("{prompt}") | llm | StrOutputParser()
+        report = await chain.ainvoke({"prompt": report_prompt})
+        
+        return JSONResponse({
+            "status": "success",
+            "participant_id": participant_id,
+            "report": report,
+            "scores": {
+                "posture_score": posture_score,
+                "gesture_score": gesture_score,
+                "speaking_score": speaking_score,
+                "peer_feedback_score": round(peer_score, 1),
+                "overall_score": overall_score
+            },
+            "feedback_summary": {
+                "total_feedbacks": len(peer_feedbacks),
+                "positive_count": sum(1 for f in peer_feedbacks if f.get("type") == "positive"),
+                "constructive_count": sum(1 for f in peer_feedbacks if f.get("type") == "constructive")
+            }
+        })
+        
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)

@@ -71,15 +71,98 @@ export default function RoomPage() {
 })
   const localVideoRef = useRef<HTMLVideoElement>(null)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null) // Add this state
+  const [mediaPipeData, setMediaPipeData] = useState({
+    session_duration: 0,
+    good_posture_seconds: 0,
+    hand_gestures_seconds: 0,
+    speaking_seconds: 0,
+    total_frames: 0
+  })
+  const [speakingStartTime, setSpeakingStartTime] = useState<number>(0)
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [participantReports, setParticipantReports] = useState<Map<string, any>>(new Map())
+  const [liveFeedbackForSpeaker, setLiveFeedbackForSpeaker] = useState<string[]>([])
 
   const remoteVideosRef = useRef<Map<string, HTMLVideoElement>>(new Map())
-  const speakingStartTime = useRef<number>(0)
-  const mediaPipeData = useRef<any>({
-    eyeContact: 0,
-    gestureCount: 0,
-    confidenceScore: 0,
-    speakingPace: 0,
-  })
+  
+  // Add message listener for MediaPipe data
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data.type === 'mediapipeData') {
+        setMediaPipeData(event.data.data)
+      }
+    }
+    
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
+  }, [])
+
+  // Add MediaPipe functions
+  const initializeMediaPipeForSpeaker = () => {
+    if (!room?.current_speaker || room.current_speaker !== currentUser.id) return
+    
+    setIsAnalyzing(true)
+    setSpeakingStartTime(Date.now())
+    
+    // Reset MediaPipe data for new speaker
+    setMediaPipeData({
+      session_duration: 0,
+      good_posture_seconds: 0,
+      hand_gestures_seconds: 0,
+      speaking_seconds: 0,
+      total_frames: 0
+    })
+    
+    // Initialize MediaPipe tracking
+    const iframe = document.querySelector('#mediapipe-iframe') as HTMLIFrameElement
+    if (iframe?.contentWindow) {
+      iframe.contentWindow.postMessage({ action: "startAnalysis" }, "*")
+    }
+  }
+  
+  const stopMediaPipeAnalysis = async () => {
+    if (!isAnalyzing) return
+    
+    setIsAnalyzing(false)
+    const sessionDuration = (Date.now() - speakingStartTime) / 1000
+    
+    // Get final MediaPipe data
+    const iframe = document.querySelector('#mediapipe-iframe') as HTMLIFrameElement
+    if (iframe?.contentWindow) {
+      iframe.contentWindow.postMessage({ action: "getSessionData" }, "*")
+    }
+    
+    // Collect peer feedbacks for current speaker
+    const speakerFeedbacks = liveFeedbacks.filter(
+      feedback => feedback.to_participant === room?.current_speaker
+    )
+    
+    // Generate individual report
+    try {
+      const response = await fetch("http://localhost:8000/submit-group-member-data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          participant_id: room?.current_speaker,
+          room_id: room?.id,
+          mediapipe_data: {
+            session_duration: sessionDuration,
+            good_posture_seconds: mediaPipeData.good_posture_seconds,
+            hand_gestures_seconds: mediaPipeData.hand_gestures_seconds,
+            speaking_seconds: mediaPipeData.speaking_seconds
+          },
+          peer_feedbacks: speakerFeedbacks
+        })
+      })
+      
+      if (response.ok) {
+        const result = await response.json()
+        setParticipantReports(prev => new Map(prev.set(room?.current_speaker || "", result)))
+      }
+    } catch (error) {
+      console.error("Error generating speaker report:", error)
+    }
+  }  
   
 
   useEffect(() => {
@@ -176,42 +259,40 @@ export default function RoomPage() {
         
         try {
           const message = JSON.parse(event.data)
-          console.log("📨 Received:", message.type)
+          console.log("📨 Received WebSocket message:", message.type, message)
           
           switch (message.type) {
-          case "room_state":
-  console.log("📊 Room state received, participants:", message.room.participants?.length)
-  console.log("🆔 Received user_id from backend:", message.user_id)
-  setRoom(message.room)
+            case "room_state":
+              console.log("📊 Room state received, participants:", message.room.participants?.length)
+              console.log("🆔 Received user_id from backend:", message.user_id)
+              setRoom(message.room)
 
-  // ✅ CRITICAL: Set the user ID for WebRTC service
-  if (message.user_id) {
-    console.log("🆔 Setting currentUserId and WebRTC user ID to:", message.user_id)
-    setCurrentUserId(message.user_id)
-    webrtcService.setCurrentUserId(message.user_id)
+              // ✅ CRITICAL: Set the user ID for WebRTC service
+              if (message.user_id) {
+                console.log("🆔 Setting currentUserId and WebRTC user ID to:", message.user_id)
+                setCurrentUserId(message.user_id)
+                webrtcService.setCurrentUserId(message.user_id)
 
-    // Use message.user_id directly here!
-    if (message.room.participants && message.room.participants.length > 1 && message.user_id) {
-      const otherParticipants = message.room.participants.filter(
-        (p: any) => (p.user_id || p.id) !== message.user_id
-      )
-      otherParticipants.forEach(async (participant: any, index: number) => {
-        const participantId = participant.user_id || participant.id
-        setTimeout(async () => {
-          try {
-            console.log("🔗 [NEW JOINER] Creating offer for existing participant:", participantId)
-            await webrtcService.createOffer(participantId)
-          } catch (error) {
-            console.error("Failed to create offer for existing participant (new joiner):", error)
-          }
-        }, 2000 + (index * 1000))
-      })
-    }
-  } else {
-    console.error("❌ No user_id received from backend!")
-  }
-  // ...rest of your code...
-              
+                // Use message.user_id directly here!
+                if (message.room.participants && message.room.participants.length > 1 && message.user_id) {
+                  const otherParticipants = message.room.participants.filter(
+                    (p: any) => (p.user_id || p.id) !== message.user_id
+                  )
+                  otherParticipants.forEach(async (participant: any, index: number) => {
+                    const participantId = participant.user_id || participant.id
+                    setTimeout(async () => {
+                      try {
+                        console.log("🔗 [NEW JOINER] Creating offer for existing participant:", participantId)
+                        await webrtcService.createOffer(participantId)
+                      } catch (error) {
+                        console.error("Failed to create offer for existing participant (new joiner):", error)
+                      }
+                    }, 2000 + (index * 1000))
+                  })
+                }
+              } else {
+                console.error("❌ No user_id received from backend!")
+              }
               
               const currentParticipant = message.room.participants?.find(
                 (p: any) => (p.user_id || p.id) === message.user_id
@@ -226,43 +307,21 @@ export default function RoomPage() {
                   try {
                     console.log("🎥 Initializing WebRTC after room state...")
                     await initializeWebRTC()
-                    
-                    // IMPORTANT: Wait for video elements to render before connecting
-                    setTimeout(() => {
-                      if (message.room.participants && message.room.participants.length > 1 && message.user_id) {
-                        const otherParticipants = message.room.participants.filter(
-                          (p: any) => (p.user_id || p.id) !== message.user_id
-                        )
-                        otherParticipants.forEach(async (participant: any, index: number) => {
-                          const participantId = participant.user_id || participant.id
-                          setTimeout(async () => {
-                            try {
-                              console.log("🔗 [NEW JOINER] Creating offer for existing participant:", participantId)
-                              await webrtcService.createOffer(participantId)
-                            } catch (error) {
-                              console.error("Failed to create offer for existing participant (new joiner):", error)
-                            }
-                          }, 2000 + (index * 1000))
-                        })
-                      }
-                    }, 2000) // Wait for video elements to be created
-                    
                   } catch (error) {
                     console.error("WebRTC initialization failed:", error)
                   }
                 }
-              }, 1000) // Initial delay for UI rendering
+              }, 1000)
               break
+
             case "participant_joined":
               console.log("👥 Participant joined. Total:", message.room.participants?.length)
               setRoom(message.room)
               
-              // IMPORTANT: Only initiate connection if we have a user ID
               if (message.new_participant && message.new_participant.user_id !== currentUserId && currentUserId) {
                 const newParticipantId = message.new_participant.user_id
                 console.log("🔗 Initiating WebRTC connection:", currentUserId, "->", newParticipantId)
                 
-                // Wait for UI to render the new video element
                 setTimeout(async () => {
                   try {
                     console.log("🎯 Creating offer for participant:", newParticipantId)
@@ -270,7 +329,7 @@ export default function RoomPage() {
                   } catch (error) {
                     console.error("Failed to create offer for new participant:", error)
                   }
-                }, 3000) // Increased delay to ensure UI renders
+                }, 3000)
               }
               break
               
@@ -284,81 +343,138 @@ export default function RoomPage() {
               break
               
             case "session_started":
+              console.log("📍 Session started, entering preparation phase")
+              console.log("📍 Room data:", message.room)
+              console.log("📍 Current speaker:", message.room.current_speaker)
+              
               setRoom(message.room)
               setSessionPhase("preparation")
-              setPreparationTime(message.room.preparation_time || 60) // <-- Set prep time (default 60s if not provided)
+              setPreparationTime(60)
               generateTopic()
-              // Start countdown for preparation phase
-              {
-                let prep = message.room.preparation_time || 60
-                setPreparationTime(prep)
-                const prepInterval = setInterval(() => {
-                  setPreparationTime(prev => {
-                    if (prev <= 1) {
-                      clearInterval(prepInterval)
-                      setSessionPhase("speaking")
-                      setTimeRemaining(message.room.time_per_speaker * 60)
-                      return 0
+              
+              // FIXED: Only current speaker sends preparation_complete
+              console.log("📍 Starting 60-second preparation countdown")
+              let countdown = 60
+              setPreparationTime(countdown)
+              
+              const timerInterval = setInterval(() => {
+                countdown -= 1
+                setPreparationTime(countdown)
+                console.log(`📍 Preparation countdown: ${countdown} seconds remaining`)
+                
+                if (countdown <= 0) {
+                  clearInterval(timerInterval)
+                  console.log("📍 Preparation time complete!")
+                  
+                  // ONLY CURRENT SPEAKER SENDS preparation_complete
+                  if (message.room.current_speaker === currentUser.id) {
+                    console.log("📍 I'm the current speaker, sending preparation_complete")
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                      const prepCompleteMessage = {
+                        type: "preparation_complete",
+                        room_id: message.room.id
+                      }
+                      console.log("📍 Sending message:", prepCompleteMessage)
+                      ws.send(JSON.stringify(prepCompleteMessage))
                     }
-                    return prev - 1
-                  })
-                }, 1000)
+                  } else {
+                    console.log("📍 I'm not the current speaker, waiting for speaking phase")
+                  }
+                }
+              }, 1000)
+              break
+
+            case "speaking_started":
+              console.log("📍 Speaking phase started - received from backend")
+              setRoom(message.room)
+              setSessionPhase("speaking")
+              setPreparationTime(0)
+              
+              // Start speaking timer for current speaker
+              if (message.room.current_speaker) {
+                console.log(`📍 Starting speaking for: ${message.room.current_speaker}`)
+                startSpeaking(message.room.current_speaker)
               }
               break
-              
+
             case "speaker_changed":
+              console.log("📍 Speaker changed, new preparation phase")
               setRoom(message.room)
-              if (message.room.status === "completed") {
-                setSessionPhase("completed")
-                getPersonalReport()
-                setShowReport(true)
-              }else if (message.room.current_speaker === currentUser.id) {
-                startSpeaking() // <-- Start timer for the current speaker
-              }
+              setSessionPhase("preparation")
+              
+              // 30 seconds prep for next speaker
+              console.log("📍 Starting 30-second next speaker preparation")
+              let nextCountdown = 30
+              setPreparationTime(nextCountdown)
+              
+              const nextTimerInterval = setInterval(() => {
+                nextCountdown -= 1
+                setPreparationTime(nextCountdown)
+                console.log(`📍 Next speaker prep: ${nextCountdown} seconds remaining`)
+                
+                if (nextCountdown <= 0) {
+                  clearInterval(nextTimerInterval)
+                  console.log("📍 Next speaker preparation complete!")
+                  
+                  // ONLY NEW CURRENT SPEAKER SENDS preparation_complete
+                  if (message.room.current_speaker === currentUser.id) {
+                    console.log("📍 I'm the new current speaker, sending preparation_complete")
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                      ws.send(JSON.stringify({
+                        type: "preparation_complete",
+                        room_id: message.room.id
+                      }))
+                    }
+                  } else {
+                    console.log("📍 I'm not the new speaker, waiting")
+                  }
+                }
+              }, 1000)
+              break
+            case "session_completed":
+              console.log("📍 Session completed")
+              setRoom(message.room)
+              setSessionPhase("completed")
+              setShowReport(true)
               break
               
             case "webrtc_offer":
-  console.log("📞 Received WebRTC offer from:", message.from, "to:", message.to)
-  console.log("📞 Current user ID:", currentUserId)
-  console.log("📞 Should process?", !message.to || message.to === currentUserId)
-
-  if (!message.to || message.to === currentUserId || message.to === currentUser.id) {
-    console.log("✅ Processing WebRTC offer from:", message.from)
-    try {
-      await webrtcService.handleRemoteOffer(message.from, message.offer)
-      console.log("✅ Successfully handled offer from:", message.from)
-    } catch (error) {
-      console.error("❌ Error handling offer:", error)
-    }
-  } else {
-    console.log("⏭️ Skipping offer - not for us")
-  }
-  break
+              console.log("📞 Received WebRTC offer from:", message.from, "to:", message.to)
+              if (!message.to || message.to === currentUserId || message.to === currentUser.id) {
+                console.log("✅ Processing WebRTC offer from:", message.from)
+                try {
+                  await webrtcService.handleRemoteOffer(message.from, message.offer)
+                  console.log("✅ Successfully handled offer from:", message.from)
+                } catch (error) {
+                  console.error("❌ Error handling offer:", error)
+                }
+              } else {
+                console.log("⏭️ Skipping offer - not for us")
+              }
+              break
 
             case "webrtc_answer":
-              console.log("📞 Received WebRTC answer from:", message.from, "to:", message.to, "currentUserId:", currentUserId)
-              // ✅ FIXED: Use currentUserId instead of message.user_id
+              console.log("📞 Received WebRTC answer from:", message.from)
               if (!message.to || message.to === currentUserId || message.to === currentUser.id) {
                 console.log("✅ Processing WebRTC answer from:", message.from)
                 webrtcService.handleAnswer(message.from, message.answer)
-              } else {
-                console.log("⏭️ Skipping answer - not for us. Target:", message.to, "We are:", currentUserId)
               }
               break
 
             case "webrtc_ice_candidate":
-              console.log("🧊 Received ICE candidate from:", message.from, "to:", message.to, "currentUserId:", currentUserId)
-              // ✅ FIXED: Use currentUserId instead of message.user_id
+              console.log("🧊 Received ICE candidate from:", message.from)
               if (!message.to || message.to === currentUserId || message.to === currentUser.id) {
                 console.log("✅ Processing ICE candidate from:", message.from)
                 webrtcService.handleIceCandidate(message.from, message.candidate)
-              } else {
-                console.log("⏭️ Skipping ICE candidate - not for us. Target:", message.to, "We are:", currentUserId)
               }
+              break
+
+            default:
+              console.log(`❓ Unknown message type: ${message.type}`)
               break
           }
         } catch (error) {
-          console.error("Failed to parse WebSocket message:", error)
+          console.error("❌ Error handling WebSocket message:", error)
         }
       }
 
@@ -664,21 +780,35 @@ useEffect(() => {
     setCurrentTopic(randomTopic)
   }
 
-  const startSpeaking = () => {
+    const startSpeaking = (participantId?: string) => {
     if (!room) return
 
+    const speakerId = participantId || room.current_speaker
+    console.log(`🎤 Starting speaking session for: ${speakerId}`)
+    console.log(`🆔 Current user ID: ${currentUser.id}`)
+    console.log(`🎯 Is current user speaking: ${speakerId === currentUser.id}`)
+    
     setSessionPhase("speaking")
     setTimeRemaining(room.time_per_speaker * 60)
-    speakingStartTime.current = Date.now()
-
-    // if (room.current_speaker === currentUser.id) {
-    //   mediaPipeAnalyzer.startAnalysis()
-    // }
-
+    
+    // Initialize MediaPipe for current speaker
+    if (speakerId === currentUser.id) {
+      console.log("🎥 Current user is speaking - initializing MediaPipe")
+      
+      // Small delay to ensure DOM is ready
+      setTimeout(() => {
+        initializeMediaPipeForSpeaker()
+      }, 2000)
+    } else {
+      console.log("👁️ Current user is not speaking - will watch")
+    }
+    
+    // Start timer countdown
     const speakTimer = setInterval(() => {
       setTimeRemaining((prev) => {
         if (prev <= 1) {
           clearInterval(speakTimer)
+          console.log("⏰ Speaking time ended, finishing speech")
           endCurrentSpeech()
           return 0
         }
@@ -687,44 +817,38 @@ useEffect(() => {
     }, 1000)
   }
 
-  const endCurrentSpeech = async () => {
-    if (!room || !socket) return
+    const endCurrentSpeech = async () => {
+    if (!room) return
 
-    const analysisResults = await mediaPipeAnalyzer.stopAnalysis()
-    mediaPipeData.current = analysisResults
-
-    if (socket) {
+    console.log(`🏁 Ending speech for: ${room.current_speaker}`)
+    
+    // Stop MediaPipe analysis and generate report
+    await stopMediaPipeAnalysis()
+    
+    // FIX: Use the actual socket from state (this one is correct)
+    if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({
-        type: "update_participant_data",
-        participant_id: currentUser.id,
-        mediapipe_analysis: {
-          eye_contact_percentage: analysisResults.eyeContactPercentage,
-          gesture_count: analysisResults.gestureCount,
-          confidence_score: analysisResults.confidenceScore,
-          speaking_pace: analysisResults.speakingPace,
-          volume_consistency: analysisResults.volumeConsistency,
-        },
-        speaking_time_used: (Date.now() - speakingStartTime.current) / 1000
+        type: "speaker_finished",
+        participant_id: room.current_speaker,
+        room_id: room.id
       }))
+    } else {
+      console.error("❌ Socket not available in endCurrentSpeech")
     }
-    await getPersonalReport()
-    setShowReport(true)
 
-    setSessionPhase("feedback")
-
-    setTimeout(() => {
-      nextSpeaker()
-    }, 30000)
+    setTimeRemaining(0)
   }
 
   const nextSpeaker = () => {
-    if (!room || !isHost || !socket) return
+    if (!room || !socket) return
 
     socket.send(JSON.stringify({
       type: "next_speaker",
       room_id: room.id
     }))
   }
+
+
   // ✅ ENHANCED: Better debug function
 const debugWebRTCConnections = () => {
   console.log("🔍 === WebRTC Debug Info ===")
@@ -745,6 +869,15 @@ const debugWebRTCConnections = () => {
     const interval = setInterval(debugWebRTCConnections, 10000)
     return () => clearInterval(interval)
   }, [currentUserId, room])
+
+    // Debug preparation phase
+  useEffect(() => {
+    if (sessionPhase === "preparation") {
+      console.log(`📍 PREPARATION PHASE: ${preparationTime} seconds remaining`)
+      console.log(`📍 Current speaker: ${room?.current_speaker}`)
+      console.log(`📍 Socket connected: ${socket?.readyState === WebSocket.OPEN}`)
+    }
+  }, [preparationTime, sessionPhase])
 
   const sendFeedback = () => {
     if (!room || !feedbackMessage.trim() || !socket) return
@@ -843,6 +976,54 @@ const debugWebRTCConnections = () => {
       <div className="container mx-auto px-4 py-6">
         <div className="grid lg:grid-cols-4 gap-6">
           <div className="lg:col-span-3">
+            {sessionPhase === "preparation" && (
+              <Card className="mb-6">
+                <CardContent className="text-center py-8">
+                  <div className="mb-8">
+                    <Badge className="mb-4 bg-orange-100 text-orange-700">Preparation Time</Badge>
+                    <div className="text-6xl font-bold text-orange-600 mb-4">{formatTime(preparationTime)}</div>
+                    <div className="w-full max-w-md mx-auto bg-gray-200 rounded-full h-3 mb-6">
+                      <div 
+                        className="bg-orange-600 h-3 rounded-full transition-all duration-1000" 
+                        style={{width: `${Math.max(0, 100 - (preparationTime / 60) * 100)}%`}}
+                      ></div>
+                    </div>
+                    <h2 className="text-2xl font-bold mb-4">
+                      {room?.current_speaker === currentUser.id 
+                        ? "Get Ready - You're Speaking Next!" 
+                        : `${room?.participants.find(p => p.user_id === room?.current_speaker)?.user_name || 'Someone'} is preparing to speak`}
+                    </h2>
+                  </div>
+
+                  {/* Topic Display */}
+                  {currentTopic && (
+                    <Card className="max-w-2xl mx-auto">
+                      <CardHeader>
+                        <CardTitle>Speaking Topic</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-6 rounded-lg">
+                          <p className="text-lg font-medium text-gray-800">{currentTopic}</p>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {/* Preparation Tips */}
+                  <Card className="max-w-2xl mx-auto mt-4">
+                    <CardContent className="pt-6">
+                      <h3 className="font-semibold mb-3">Quick Preparation Tips:</h3>
+                      <ul className="text-sm text-gray-600 space-y-1">
+                        <li>• Think of 2-3 main points to cover</li>
+                        <li>• Plan your opening and closing statements</li>
+                        <li>• Take deep breaths and stay calm</li>
+                        <li>• Check your camera and microphone</li>
+                      </ul>
+                    </CardContent>
+                  </Card>
+                </CardContent>
+              </Card>
+            )}
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
@@ -851,12 +1032,8 @@ const debugWebRTCConnections = () => {
                     <span>{room.name}</span>
                   </CardTitle>
 
-                  {sessionPhase === "preparation" && (
-                    <div className="flex items-center space-x-2 text-orange-600">
-                      <Clock className="w-4 h-4" />
-                      <span className="font-bold">Prep: {formatTime(preparationTime)}</span>
-                    </div>
-                  )}
+                         
+        
 
                   {sessionPhase === "speaking" && (
                     <div className="flex items-center space-x-2 text-red-600">
@@ -879,7 +1056,14 @@ const debugWebRTCConnections = () => {
                   gridTemplateColumns: `repeat(${Math.min(4, Math.max(1, room.participants?.length || 1))}, 1fr)` 
                 }}>
                   <div className="relative aspect-video bg-gray-800 rounded-lg overflow-hidden">
-                    <video ref={localVideoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
+                    <video 
+                      ref={localVideoRef} 
+                      autoPlay 
+                      muted 
+                      playsInline 
+                      className="w-full h-full object-cover"
+                      data-testid="local-video"
+                    />
                     <div className="absolute bottom-2 left-2 bg-black/50 text-white px-2 py-1 rounded text-sm">
                       You {room.current_speaker === currentUser.id && sessionPhase === "speaking" && "(Speaking)"}
                     </div>
@@ -984,8 +1168,226 @@ const debugWebRTCConnections = () => {
         </div>
       )
     })
-})()}
+                })()}
                                   </div>
+
+                {/* MediaPipe Analysis for Current Speaker - SIMPLIFIED */}
+                {room.current_speaker === currentUser.id && sessionPhase === "speaking" && (
+                  <div className="mt-6">
+                    {/* Only Camera Feed with Embedded MediaPipe Feedback */}
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Your Speaking Analysis</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="relative">
+                          {/* Camera Feed */}
+                          <div className="relative aspect-video bg-gray-800 rounded-lg overflow-hidden mb-4">
+                            <video 
+                              ref={localVideoRef} 
+                              autoPlay 
+                              muted 
+                              playsInline 
+                              className="w-full h-full object-cover"
+                              data-testid="local-video"
+                            />
+                            <div className="absolute top-2 left-2 right-2 bg-black bg-opacity-75 text-white p-2 rounded text-sm">
+                              <div id="camera-feedback">Starting analysis...</div>
+                            </div>
+                          </div>
+                          
+                          {/* Hidden iframe for MediaPipe processing */}
+                          <iframe
+                            id="mediapipe-iframe"
+                            srcDoc={`
+                              <!DOCTYPE html>
+                              <html>
+                              <head>
+                                <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+                                <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"></script>
+                                <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js"></script>
+                                <style>
+                                  body { margin: 0; padding: 10px; font-family: Arial, sans-serif; }
+                                  .input_video { display: none; }
+                                  .output_canvas { display: none; }
+                                </style>
+                              </head>
+                              <body>
+                                <video class="input_video" autoplay playsinline></video>
+                                <canvas class="output_canvas" width="640px" height="480px"></canvas>
+                                
+                                <script>
+                                  const videoElement = document.getElementsByClassName('input_video')[0];
+                                  const canvasElement = document.getElementsByClassName('output_canvas')[0];
+                                  const canvasCtx = canvasElement.getContext('2d');
+                                  
+                                  // MediaPipe data tracking (EXACT COPY FROM SOLO)
+                                  let mediaPipeData = {
+                                    goodPostureSeconds: 0,
+                                    handGesturesSeconds: 0,
+                                    speakingSeconds: 0,
+                                    totalFrames: 0,
+                                    goodPostureFrames: 0,
+                                    handGesturesFrames: 0,
+                                    speakingFrames: 0,
+                                    sessionStartTime: Date.now()
+                                  };
+
+                                  // Get camera stream (EXACT COPY FROM SOLO)
+                                  navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+                                    .then(stream => {
+                                      videoElement.srcObject = stream;
+                                      videoElement.onloadedmetadata = () => {
+                                        videoElement.play();
+                                      };
+                                    })
+                                    .catch(err => {
+                                      console.error('Camera access failed:', err);
+                                      updateParentFeedback('❌ Camera access failed');
+                                    });
+
+                                  // Initialize MediaPipe (EXACT COPY FROM SOLO)
+                                  const holistic = new Holistic({
+                                    locateFile: (file) => \`https://cdn.jsdelivr.net/npm/@mediapipe/holistic/\${file}\`
+                                  });
+
+                                  holistic.setOptions({
+                                    modelComplexity: 1,
+                                    smoothLandmarks: true,
+                                    enableSegmentation: false,
+                                    refineFaceLandmarks: true,
+                                    minDetectionConfidence: 0.5,
+                                    minTrackingConfidence: 0.5
+                                  });
+
+                                  // EXACT COPY OF RESULTS PROCESSING FROM SOLO
+                                  holistic.onResults(results => {
+                                    mediaPipeData.totalFrames++;
+                                    
+                                    let feedback = [];
+                                    let goodPosture = false;
+                                    let handGestures = false;
+                                    let speaking = false;
+
+                                    // 1. POSTURE ANALYSIS (EXACT COPY FROM SOLO)
+                                    if (results.poseLandmarks) {
+                                      const leftShoulder = results.poseLandmarks[11];
+                                      const rightShoulder = results.poseLandmarks[12];
+                                      if (leftShoulder && rightShoulder) {
+                                        const shoulderTilt = Math.abs(leftShoulder.y - rightShoulder.y);
+                                        if (shoulderTilt <= 0.05) {
+                                          feedback.push("✅ <strong>Good posture</strong>");
+                                          goodPosture = true;
+                                          mediaPipeData.goodPostureFrames++;
+                                        } else {
+                                          feedback.push("🔴 <strong>Stand upright:</strong> Your shoulders seem tilted");
+                                        }
+                                      } else {
+                                        feedback.push("ℹ️ Stand further back to detect posture");
+                                      }
+                                    } else {
+                                      feedback.push("ℹ️ No pose detected for posture analysis");
+                                    }
+
+                                    // 2. HAND GESTURE ANALYSIS (EXACT COPY FROM SOLO)
+                                    const handsVisible = results.leftHandLandmarks || results.rightHandLandmarks;
+                                    if (handsVisible) {
+                                      feedback.push("✅ <strong>Hands detected:</strong> Good use of gestures");
+                                      handGestures = true;
+                                      mediaPipeData.handGesturesFrames++;
+                                    } else {
+                                      feedback.push("🔴 <strong>Try to use more hand gestures</strong> for expression");
+                                    }
+
+                                    // 3. SPEAKING DETECTION (EXACT COPY FROM SOLO)
+                                    if (results.faceLandmarks && results.faceLandmarks.length > 14) {
+                                      const upperLip = results.faceLandmarks[13];
+                                      const lowerLip = results.faceLandmarks[14];
+                                      if (upperLip && lowerLip) {
+                                        const mouthOpen = (lowerLip.y - upperLip.y) > 0.015;
+                                        if (mouthOpen) {
+                                          feedback.push("✅ <strong>You're likely speaking</strong>");
+                                          speaking = true;
+                                          mediaPipeData.speakingFrames++;
+                                        } else {
+                                          feedback.push("🔴 <strong>Try to speak up</strong> or vary expressions if you're speaking");
+                                        }
+                                      } else {
+                                        feedback.push("ℹ️ No face detected for mouth analysis");
+                                      }
+                                    } else {
+                                      feedback.push("ℹ️ No face detected for mouth analysis");
+                                    }
+
+                                    // Update parent window feedback (EXACT COPY FROM SOLO)
+                                    updateParentFeedback(feedback.join("<br>"));
+                                  });
+
+                                  // Camera initialization (EXACT COPY FROM SOLO)
+                                  const camera = new Camera(videoElement, {
+                                    onFrame: async () => {
+                                      await holistic.send({ image: videoElement });
+                                    },
+                                    width: 640,
+                                    height: 480
+                                  });
+
+                                  // Auto-start camera (EXACT COPY FROM SOLO)
+                                  setTimeout(() => {
+                                    camera.start();
+                                    updateParentFeedback("Analysis started...");
+                                  }, 1000);
+
+                                  // Function to update parent window feedback
+                                  function updateParentFeedback(feedbackText) {
+                                    try {
+                                      const parentFeedback = window.parent.document.getElementById('camera-feedback');
+                                      if (parentFeedback) {
+                                        parentFeedback.innerHTML = feedbackText;
+                                      }
+                                    } catch (e) {
+                                      console.log('Could not update parent feedback:', e);
+                                    }
+                                  }
+                                  
+                                  // Message handler for session data (EXACT COPY FROM SOLO)
+                                  window.addEventListener('message', (event) => {
+                                    if (event.data.action === 'getSessionData') {
+                                      const sessionDuration = (Date.now() - mediaPipeData.sessionStartTime) / 1000;
+                                      const frameRate = 30; // Approximate frame rate
+                                      
+                                      window.parent.postMessage({
+                                        type: 'mediapipeData',
+                                        data: {
+                                          session_duration: sessionDuration,
+                                          good_posture_seconds: (mediaPipeData.goodPostureFrames / frameRate),
+                                          hand_gestures_seconds: (mediaPipeData.handGesturesFrames / frameRate),
+                                          speaking_seconds: (mediaPipeData.speakingFrames / frameRate)
+                                        }
+                                      }, '*');
+                                    }
+                                    
+                                    if (event.data.action === 'startAnalysis') {
+                                      mediaPipeData.sessionStartTime = Date.now();
+                                      mediaPipeData.goodPostureFrames = 0;
+                                      mediaPipeData.handGesturesFrames = 0;
+                                      mediaPipeData.speakingFrames = 0;
+                                      mediaPipeData.totalFrames = 0;
+                                      updateParentFeedback("Analysis restarted...");
+                                    }
+                                  });
+                                </script>
+                              </body>
+                              </html>
+                            `}
+                            className="w-0 h-0 border-0 opacity-0 pointer-events-none"
+                            title="MediaPipe Analysis"
+                          />
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                )}
 
                 <div className="flex justify-center space-x-4">
                   <Button onClick={toggleMic} variant={micEnabled ? "default" : "destructive"} size="lg">
@@ -1289,6 +1691,60 @@ const debugWebRTCConnections = () => {
                       Download Detailed Report
                     </Button>
                   </div>
+                                </CardContent>
+              </Card>
+            )}
+
+            {/* ADD THIS INDIVIDUAL REPORTS SECTION HERE - AFTER THE EXISTING PERFORMANCE REPORT CARD */}
+            {/* Individual Reports */}
+            {participantReports.has(currentUser.id) && (
+              <Card className="mt-6">
+                <CardHeader>
+                  <CardTitle>Your Individual Performance Report</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {(() => {
+                    const report = participantReports.get(currentUser.id);
+                    return (
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                          <div className="text-center">
+                            <div className="text-2xl font-bold text-blue-600">{report.scores.posture_score}%</div>
+                            <div className="text-sm text-gray-600">Posture</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-2xl font-bold text-green-600">{report.scores.gesture_score}%</div>
+                            <div className="text-sm text-gray-600">Gestures</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-2xl font-bold text-purple-600">{report.scores.speaking_score}%</div>
+                            <div className="text-sm text-gray-600">Speaking</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-2xl font-bold text-orange-600">{report.scores.overall_score}%</div>
+                            <div className="text-sm text-gray-600">Overall</div>
+                          </div>
+                        </div>
+                        
+                        <div className="bg-gray-50 p-4 rounded-lg">
+                          <h4 className="font-semibold mb-2">AI Analysis</h4>
+                          <p className="text-sm whitespace-pre-wrap">{report.report}</p>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                          <div>
+                            <strong>Total Feedback:</strong> {report.feedback_summary.total_feedbacks}
+                          </div>
+                          <div>
+                            <strong>Positive:</strong> {report.feedback_summary.positive_count}
+                          </div>
+                          <div>
+                            <strong>Constructive:</strong> {report.feedback_summary.constructive_count}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </CardContent>
               </Card>
             )}
