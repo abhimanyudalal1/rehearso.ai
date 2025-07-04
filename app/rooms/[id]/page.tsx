@@ -49,6 +49,9 @@ export default function RoomPage() {
     }
     return { id, name: "You" }
   })  
+  const [reportGenerationAttempts, setReportGenerationAttempts] = useState<Set<string>>(new Set())
+
+  const [reportNotification, setReportNotification] = useState<string | null>(null)
   const [isHost, setIsHost] = useState(false)
   const [cameraEnabled, setCameraEnabled] = useState(true)
   const [micEnabled, setMicEnabled] = useState(true)
@@ -140,31 +143,173 @@ export default function RoomPage() {
     )
     
     // Generate individual report
-    try {
-      const response = await fetch("http://localhost:8000/submit-group-member-data", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          participant_id: room?.current_speaker,
-          room_id: room?.id,
-          mediapipe_data: {
-            session_duration: sessionDuration,
-            good_posture_seconds: mediaPipeData.good_posture_seconds,
-            hand_gestures_seconds: mediaPipeData.hand_gestures_seconds,
-            speaking_seconds: mediaPipeData.speaking_seconds
-          },
-          peer_feedbacks: speakerFeedbacks
-        })
-      })
+    // try {
+    //   const response = await fetch("http://localhost:8000/submit-group-member-data", {
+    //     method: "POST",
+    //     headers: { "Content-Type": "application/json" },
+    //     body: JSON.stringify({
+    //       participant_id: room?.current_speaker,
+    //       room_id: room?.id,
+    //       mediapipe_data: {
+    //         session_duration: sessionDuration,
+    //         good_posture_seconds: mediaPipeData.good_posture_seconds,
+    //         hand_gestures_seconds: mediaPipeData.hand_gestures_seconds,
+    //         speaking_seconds: mediaPipeData.speaking_seconds
+    //       },
+    //       peer_feedbacks: speakerFeedbacks
+    //     })
+    //   })
       
-      if (response.ok) {
-        const result = await response.json()
-        setParticipantReports(prev => new Map(prev.set(room?.current_speaker || "", result)))
-      }
-    } catch (error) {
-      console.error("Error generating speaker report:", error)
-    }
+    //   if (response.ok) {
+    //     const result = await response.json()
+    //     setParticipantReports(prev => new Map(prev.set(room?.current_speaker || "", result)))
+    //   }
+    // } catch (error) {
+    //   console.error("Error generating speaker report:", error)
+    // }
   }  
+  // ...existing code...
+
+// ...existing code...
+
+// Update the generateSpeakerReport function to properly wait for MediaPipe data
+const generateSpeakerReport = async (speakerId: string, roomId: string) => {
+  const reportKey = `${speakerId}-${roomId}`
+  
+  // ✅ Check if we already generated or are generating this report
+  if (reportGenerationAttempts.has(reportKey)) {
+    console.log(`📊 Report already being generated for ${speakerId}, skipping...`)
+    return
+  }
+  
+  // ✅ Check if report already exists
+  if (participantReports.has(speakerId)) {
+    console.log(`📊 Report already exists for ${speakerId}, skipping...`)
+    return
+  }
+  
+  // ✅ Mark as being generated
+  setReportGenerationAttempts(prev => new Set(prev.add(reportKey)))
+  
+  console.log(`📊 Generating report for speaker: ${speakerId}`)
+  
+  try {
+    // ✅ Only generate report if current user is the speaker (to avoid multiple clients generating)
+    if (speakerId !== currentUser.id) {
+      console.log(`📊 Skipping report generation - not the current user (${speakerId} vs ${currentUser.id})`)
+      return
+    }
+    
+    // ✅ FIX: Ensure we're getting the latest MediaPipe data
+    let finalMediaPipeData = { ...mediaPipeData }
+    
+    // Get final MediaPipe data from iframe if current user is speaking
+    if (speakerId === currentUser.id) {
+      const iframe = document.querySelector('#mediapipe-iframe') as HTMLIFrameElement
+      if (iframe?.contentWindow) {
+        console.log("📊 Requesting final MediaPipe data...")
+        iframe.contentWindow.postMessage({ action: "getSessionData" }, "*")
+        
+        // Wait for MediaPipe data to be updated
+        await new Promise((resolve) => {
+          const handleMediaPipeUpdate = (event: MessageEvent) => {
+            if (event.data.type === 'mediapipeData') {
+              console.log("📊 Received final MediaPipe data:", event.data.data)
+              finalMediaPipeData = event.data.data
+              window.removeEventListener('message', handleMediaPipeUpdate)
+              resolve(event.data.data)
+            }
+          }
+          window.addEventListener('message', handleMediaPipeUpdate)
+          
+          // Timeout after 3 seconds
+          setTimeout(() => {
+            window.removeEventListener('message', handleMediaPipeUpdate)
+            console.log("⚠️ MediaPipe data timeout, using current data")
+            resolve(finalMediaPipeData)
+          }, 3000)
+        })
+      }
+    }
+    
+    const sessionDuration = (Date.now() - speakingStartTime) / 1000
+    
+    // ✅ FIX: Get current liveFeedbacks state value
+    const currentLiveFeedbacks = liveFeedbacks
+    console.log("📊 Current liveFeedbacks:", currentLiveFeedbacks)
+    
+    // Collect peer feedbacks for current speaker
+    const speakerFeedbacks = currentLiveFeedbacks.filter(
+      feedback => feedback.to_participant === speakerId
+    )
+    
+    console.log(`📊 Submitting data for ${speakerId}:`, {
+      session_duration: sessionDuration,
+      good_posture_seconds: finalMediaPipeData.good_posture_seconds,
+      hand_gestures_seconds: finalMediaPipeData.hand_gestures_seconds,
+      speaking_seconds: finalMediaPipeData.speaking_seconds,
+      peer_feedbacks_count: speakerFeedbacks.length,
+      peer_feedbacks: speakerFeedbacks
+    })
+    
+    // Generate individual report (async, non-blocking)
+    const response = await fetch("http://localhost:8000/submit-group-member-data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        participant_id: speakerId,
+        room_id: roomId,
+        mediapipe_data: {
+          session_duration: sessionDuration,
+          good_posture_seconds: finalMediaPipeData.good_posture_seconds || 0,
+          hand_gestures_seconds: finalMediaPipeData.hand_gestures_seconds || 0,
+          speaking_seconds: finalMediaPipeData.speaking_seconds || 0
+        },
+        peer_feedbacks: speakerFeedbacks
+      })
+    })
+    
+    if (response.ok) {
+      const result = await response.json()
+      console.log(`✅ Report generated successfully for ${speakerId}`)
+      console.log("📊 Report result:", result)
+      
+      // Update participant reports state
+      setParticipantReports(prev => new Map(prev.set(speakerId, result)))
+      
+      // Show notification to user if it's their report
+      if (speakerId === currentUser.id) {
+        console.log("🎉 Your report is ready!")
+        setReportNotification(speakerId)
+      }
+    } else {
+      console.error(`❌ Failed to generate report for ${speakerId}:`, response.status)
+      const errorText = await response.text()
+      console.error("Error details:", errorText)
+      
+      // ✅ Remove from attempts if failed so it can be retried
+      setReportGenerationAttempts(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(reportKey)
+        return newSet
+      })
+    }
+  } catch (error) {
+    console.error(`❌ Error generating report for ${speakerId}:`, error)
+    
+    // ✅ Remove from attempts if failed so it can be retried
+    setReportGenerationAttempts(prev => {
+      const newSet = new Set(prev)
+      newSet.delete(reportKey)
+      return newSet
+    })
+  } finally {
+    // Stop MediaPipe analysis if it's the current user
+    if (speakerId === currentUser.id) {
+      setIsAnalyzing(false)
+    }
+  }
+}
   
 
   useEffect(() => {
@@ -264,6 +409,11 @@ export default function RoomPage() {
           console.log("📨 Received WebSocket message:", message.type, message)
           
           switch (message.type) {
+            case "send_feedback":
+              console.log("📝 Received feedback:", message.feedback)
+              // ✅ FIX: Update liveFeedbacks state when feedback is received
+              setLiveFeedbacks(prev => [...prev, message.feedback])
+              break
             case "room_state":
               console.log("📊 Room state received, participants:", message.room.participants?.length)
               console.log("🆔 Received user_id from backend:", message.user_id)
@@ -386,6 +536,7 @@ export default function RoomPage() {
               }, 1000)
               break
 
+            // Update the speaking_started case in the WebSocket message handler
             case "speaking_started":
               console.log("📍 Speaking phase started - received from backend")
               console.log("📍 Current speaker from message:", message.room.current_speaker)
@@ -422,7 +573,6 @@ export default function RoomPage() {
                 }
                 
                 // Start countdown timer
-                // Start countdown timer
                 const newTimer = setInterval(() => {
                   setTimeRemaining((prevTime) => {
                     const newTime = prevTime - 1
@@ -433,11 +583,17 @@ export default function RoomPage() {
                       clearInterval(newTimer)
                       setSpeakingTimer(null)
                       
+                      // ✅ FIX: Generate report for current speaker when timer ends
+                      if (message.room.current_speaker === currentUser.id) {
+                        console.log("📊 Current user's time ended - generating report")
+                        // Generate report asynchronously without blocking
+                        generateSpeakerReport(message.room.current_speaker, message.room.id)
+                      }
+                      
                       // Only current speaker sends finished message
                       if (message.room.current_speaker === currentUser.id) {
                         console.log("📤 Current user finishing speech, sending message")
                         setTimeout(() => {
-                          // FIX: Use ws instead of socket here!
                           if (ws && ws.readyState === WebSocket.OPEN) {
                             console.log("📤 About to send speaker_finished message via ws")
                             const finishedMessage = {
@@ -465,6 +621,8 @@ export default function RoomPage() {
                 console.error("❌ Missing speaker or time data in speaking_started message")
               }
               break
+
+// ...existing code...
             case "session_completed":
               console.log("📍 Session completed")
               setRoom(message.room)
@@ -502,6 +660,8 @@ export default function RoomPage() {
                 webrtcService.handleIceCandidate(message.from, message.candidate)
               }
               break
+            // ...existing code...
+
             case "speaker_changed":
               console.log("📍 Speaker changed - new preparation phase")
               console.log("📍 New current speaker:", message.room.current_speaker)
@@ -509,6 +669,17 @@ export default function RoomPage() {
               
               setRoom(message.room)
               setSessionPhase("preparation")
+              
+              // ✅ Generate report for previous speaker if they haven't got one yet
+              // const previousSpeakerOrder = message.room.speaking_order || []
+              // const newSpeakerIndex = previousSpeakerOrder.indexOf(message.room.current_speaker)
+              // if (newSpeakerIndex > 0) {
+              //   const previousSpeaker = previousSpeakerOrder[newSpeakerIndex - 1]
+              //   if (previousSpeaker && !participantReports.has(previousSpeaker)) {
+              //     console.log(`📊 Generating missing report for previous speaker: ${previousSpeaker}`)
+              //     generateSpeakerReport(previousSpeaker, message.room.id)
+              //   }
+              // }
               
               // 30 seconds prep for next speaker
               console.log("📍 Starting 30-second next speaker preparation")
@@ -655,6 +826,17 @@ useEffect(() => {
     })()
   }
 }, [localVideoRef.current, room?.current_speaker, sessionPhase, currentUser.id])
+
+useEffect(() => {
+  if (participantReports.has(currentUser.id) && reportNotification !== currentUser.id) {
+    setReportNotification(currentUser.id)
+    
+    // Auto-hide notification after 5 seconds
+    setTimeout(() => {
+      setReportNotification(null)
+    }, 5000)
+  }
+}, [participantReports, currentUser.id])
 
   const initializeWebRTC = async () => {
   try {
@@ -869,26 +1051,32 @@ useEffect(() => {
     }
   }
 
-  const endCurrentSpeech = async () => {
-    if (!room) return
+// ...existing code...
 
-    console.log(`🏁 Manual end speech called for: ${room.current_speaker}`)
-    
-    // Stop MediaPipe analysis and generate report
-    await stopMediaPipeAnalysis()
-    
-    // Send speaker finished message
-    if (room.current_speaker === currentUser.id && socket && socket.readyState === WebSocket.OPEN) {
-      console.log("📤 Sending speaker_finished message manually")
-      socket.send(JSON.stringify({
-        type: "speaker_finished",
-        participant_id: room.current_speaker,
-        room_id: room.id
-      }))
-    }
+const endCurrentSpeech = async () => {
+  if (!room) return
 
-    setTimeRemaining(0)
+  console.log(`🏁 Manual end speech called for: ${room.current_speaker}`)
+  
+  // ✅ Generate report asynchronously (don't wait for it)
+  if (room.current_speaker) {
+    generateSpeakerReport(room.current_speaker, room.id)
   }
+  
+  // Send speaker finished message immediately
+  if (room.current_speaker === currentUser.id && socket && socket.readyState === WebSocket.OPEN) {
+    console.log("📤 Sending speaker_finished message manually")
+    socket.send(JSON.stringify({
+      type: "speaker_finished",
+      participant_id: room.current_speaker,
+      room_id: room.id
+    }))
+  }
+
+  setTimeRemaining(0)
+}
+
+// ...existing code...
 
   const nextSpeaker = () => {
     if (!room || !socket) return
@@ -931,27 +1119,40 @@ const debugWebRTCConnections = () => {
     console.log(`   - Timer Running: ${!!speakingTimer}`)
   }, [sessionPhase, timeRemaining, room?.current_speaker, speakingTimer])
 
-  const sendFeedback = () => {
-    if (!room || !feedbackMessage.trim() || !socket) return
+// ...existing code...
 
-    const newFeedback = {
-      id: Date.now().toString(),
-      from_participant: currentUser.id,
-      from_name: currentUser.name,
-      to_participant: room.current_speaker,
-      message: feedbackMessage,
-      timestamp: new Date().toISOString(),
-      type: feedbackType,
-      session_phase: sessionPhase,
-    }
+// ...existing code...
 
-    socket.send(JSON.stringify({
-      type: "send_feedback",
-      feedback: newFeedback
-    }))
+const sendFeedback = () => {
+  if (!room || !feedbackMessage.trim() || !socket || !room.current_speaker) return
 
-    setFeedbackMessage("")
+  const newFeedback: Feedback = {
+    id: Date.now().toString(),
+    from_participant: currentUser.id,
+    from_name: currentUser.name,
+    to_participant: room.current_speaker, // Now guaranteed to be string due to the guard above
+    message: feedbackMessage,
+    timestamp: new Date().toISOString(),
+    type: feedbackType,
+    session_phase: sessionPhase,
   }
+
+  console.log("📝 Sending feedback:", newFeedback)
+
+  // ✅ FIX: Update local state immediately
+  setLiveFeedbacks(prev => [...prev, newFeedback])
+
+  socket.send(JSON.stringify({
+    type: "send_feedback",
+    feedback: newFeedback
+  }))
+
+  setFeedbackMessage("")
+}
+
+// ...existing code...
+
+// ...existing code...
     const downloadReport = (report: any) => {
     if (!report) return
     
@@ -1212,6 +1413,24 @@ Report ID: ${report.participant_id || 'unknown'}_${Date.now()}
                     })()
                   }
                 </div>
+                {reportNotification && (
+  <div className="fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 flex items-center space-x-2">
+    <Trophy className="w-5 h-5" />
+    <span className="font-medium">Your performance report is ready!</span>
+    <Button 
+      variant="outline" 
+      size="sm" 
+      className="ml-2 bg-white text-green-600 hover:bg-gray-100"
+      onClick={() => {
+        setReportNotification(null)
+        // Scroll to report section
+        document.querySelector('[data-report-section]')?.scrollIntoView({ behavior: 'smooth' })
+      }}
+    >
+      View Now
+    </Button>
+  </div>
+)}
                 
                 {/* ADD PREPARATION PHASE HERE - BELOW THE VIDEO GRID */}
                 {sessionPhase === "preparation" && (
@@ -1255,6 +1474,139 @@ Report ID: ${report.participant_id || 'unknown'}_${Date.now()}
                     </Button>
                   )}
                 </div>
+                {/* Individual Performance Report with Download */}
+            {participantReports.has(currentUser.id) && (
+              <Card className="mt-6" data-report-section>
+                <CardHeader>
+                  <CardTitle className="flex items-center justify-between">
+                    <span className="flex items-center space-x-2">
+                      <Trophy className="w-5 h-5 text-yellow-500" />
+                      <span>Your Performance Report</span>
+                      {reportNotification === currentUser.id && (
+                        <Badge className="bg-green-500 animate-pulse">New!</Badge>
+                      )}
+                    </span>
+                    <Button 
+                      onClick={() => downloadReport(participantReports.get(currentUser.id))}
+                      variant="outline"
+                      size="sm"
+                      className="flex items-center space-x-2"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>Download Report</span>
+                    </Button>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {(() => {
+                    const report = participantReports.get(currentUser.id);
+                    return (
+                      <div className="space-y-6">
+                        {/* Performance Scores Grid */}
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                          <div className="text-center p-4 bg-blue-50 rounded-lg">
+                            <div className="text-2xl font-bold text-blue-600">{report.scores.posture_score}%</div>
+                            <div className="text-sm text-gray-600">Posture</div>
+                          </div>
+                          <div className="text-center p-4 bg-green-50 rounded-lg">
+                            <div className="text-2xl font-bold text-green-600">{report.scores.gesture_score}%</div>
+                            <div className="text-sm text-gray-600">Gestures</div>
+                          </div>
+                          <div className="text-center p-4 bg-purple-50 rounded-lg">
+                            <div className="text-2xl font-bold text-purple-600">{report.scores.speaking_score}%</div>
+                            <div className="text-sm text-gray-600">Speaking</div>
+                          </div>
+                          <div className="text-center p-4 bg-orange-50 rounded-lg">
+                            <div className="text-2xl font-bold text-orange-600">{report.scores.overall_score}%</div>
+                            <div className="text-sm text-gray-600">Overall</div>
+                          </div>
+                        </div>
+                        
+                        {/* Peer Feedback Summary */}
+                        <div className="bg-gray-50 p-4 rounded-lg">
+                          <h4 className="font-semibold mb-3">Peer Feedback Summary</h4>
+                          <div className="grid grid-cols-3 gap-4 text-center">
+                            <div>
+                              <div className="text-lg font-bold text-green-600">
+                                {report.feedback_summary.positive_count}
+                              </div>
+                              <div className="text-sm text-gray-600">Positive</div>
+                            </div>
+                            <div>
+                              <div className="text-lg font-bold text-orange-600">
+                                {report.feedback_summary.constructive_count}
+                              </div>
+                              <div className="text-sm text-gray-600">Constructive</div>
+                            </div>
+                            <div>
+                              <div className="text-lg font-bold text-blue-600">
+                                {report.feedback_summary.total_feedbacks}
+                              </div>
+                              <div className="text-sm text-gray-600">Total</div>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {/* AI Analysis Report */}
+                        <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                          <h4 className="font-semibold mb-3 text-blue-900">AI Performance Analysis</h4>
+                          <div className="text-sm text-blue-800 whitespace-pre-wrap leading-relaxed">
+                            {report.report}
+                          </div>
+                        </div>
+                        
+                        {/* Technical Metrics */}
+                        <div className="bg-gray-50 p-4 rounded-lg">
+                          <h4 className="font-semibold mb-3">Technical Analysis Data</h4>
+                          <div className="grid grid-cols-2 gap-4 text-sm">
+                            <div>
+                              <strong>Session Duration:</strong> {Math.round(mediaPipeData.session_duration || 0)}s
+                            </div>
+                            <div>
+                              <strong>Good Posture Time:</strong> {Math.round(mediaPipeData.good_posture_seconds || 0)}s
+                            </div>
+                            <div>
+                              <strong>Hand Gesture Time:</strong> {Math.round(mediaPipeData.hand_gestures_seconds || 0)}s
+                            </div>
+                            <div>
+                              <strong>Speaking Activity:</strong> {Math.round(mediaPipeData.speaking_seconds || 0)}s
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="flex space-x-3 pt-4 border-t">
+                          <Button
+                            onClick={() => downloadReport(report)}
+                            className="flex-1 bg-gradient-to-r from-blue-600 to-purple-600 text-white"
+                          >
+                            <Download className="w-4 h-4 mr-2" />
+                            Download Detailed Report
+                          </Button>
+                          
+                          <Button
+                            onClick={() => {
+                              const dataStr = JSON.stringify(report, null, 2)
+                              const dataUri = "data:application/json;charset=utf-8," + encodeURIComponent(dataStr)
+                              const exportFileDefaultName = `speech-report-data-${new Date().toISOString().split("T")[0]}.json`
+                              const linkElement = document.createElement("a")
+                              linkElement.setAttribute("href", dataUri)
+                              linkElement.setAttribute("download", exportFileDefaultName)
+                              linkElement.click()
+                            }}
+                            variant="outline"
+                            className="flex-1"
+                          >
+                            <FileText className="w-4 h-4 mr-2" />
+                            Export Raw Data
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </CardContent>
+              </Card>
+            )}
                 {/* Hidden MediaPipe iframe - only processes, doesn't display video */}
                 {room.current_speaker === currentUser.id && sessionPhase === "speaking" && (
                   <iframe
@@ -1722,134 +2074,7 @@ Report ID: ${report.participant_id || 'unknown'}_${Date.now()}
               </Card>
             )}
 
-            {/* ADD THIS INDIVIDUAL REPORTS SECTION HERE - AFTER THE EXISTING PERFORMANCE REPORT CARD */}
-                        {/* Individual Performance Report with Download */}
-            {participantReports.has(currentUser.id) && (
-              <Card className="mt-6">
-                <CardHeader>
-                  <CardTitle className="flex items-center justify-between">
-                    <span>Your Individual Performance Report</span>
-                    <Button 
-                      onClick={() => downloadReport(participantReports.get(currentUser.id))}
-                      variant="outline"
-                      size="sm"
-                      className="flex items-center space-x-2"
-                    >
-                      <Download className="w-4 h-4" />
-                      <span>Download Report</span>
-                    </Button>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {(() => {
-                    const report = participantReports.get(currentUser.id);
-                    return (
-                      <div className="space-y-6">
-                        {/* Performance Scores Grid */}
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                          <div className="text-center p-4 bg-blue-50 rounded-lg">
-                            <div className="text-2xl font-bold text-blue-600">{report.scores.posture_score}%</div>
-                            <div className="text-sm text-gray-600">Posture</div>
-                          </div>
-                          <div className="text-center p-4 bg-green-50 rounded-lg">
-                            <div className="text-2xl font-bold text-green-600">{report.scores.gesture_score}%</div>
-                            <div className="text-sm text-gray-600">Gestures</div>
-                          </div>
-                          <div className="text-center p-4 bg-purple-50 rounded-lg">
-                            <div className="text-2xl font-bold text-purple-600">{report.scores.speaking_score}%</div>
-                            <div className="text-sm text-gray-600">Speaking</div>
-                          </div>
-                          <div className="text-center p-4 bg-orange-50 rounded-lg">
-                            <div className="text-2xl font-bold text-orange-600">{report.scores.overall_score}%</div>
-                            <div className="text-sm text-gray-600">Overall</div>
-                          </div>
-                        </div>
-                        
-                        {/* Peer Feedback Summary */}
-                        <div className="bg-gray-50 p-4 rounded-lg">
-                          <h4 className="font-semibold mb-3">Peer Feedback Summary</h4>
-                          <div className="grid grid-cols-3 gap-4 text-center">
-                            <div>
-                              <div className="text-lg font-bold text-green-600">
-                                {report.feedback_summary.positive_count}
-                              </div>
-                              <div className="text-sm text-gray-600">Positive</div>
-                            </div>
-                            <div>
-                              <div className="text-lg font-bold text-orange-600">
-                                {report.feedback_summary.constructive_count}
-                              </div>
-                              <div className="text-sm text-gray-600">Constructive</div>
-                            </div>
-                            <div>
-                              <div className="text-lg font-bold text-blue-600">
-                                {report.feedback_summary.total_feedbacks}
-                              </div>
-                              <div className="text-sm text-gray-600">Total</div>
-                            </div>
-                          </div>
-                        </div>
-                        
-                        {/* AI Analysis Report */}
-                        <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-                          <h4 className="font-semibold mb-3 text-blue-900">AI Performance Analysis</h4>
-                          <div className="text-sm text-blue-800 whitespace-pre-wrap leading-relaxed">
-                            {report.report}
-                          </div>
-                        </div>
-                        
-                        {/* Technical Metrics */}
-                        <div className="bg-gray-50 p-4 rounded-lg">
-                          <h4 className="font-semibold mb-3">Technical Analysis Data</h4>
-                          <div className="grid grid-cols-2 gap-4 text-sm">
-                            <div>
-                              <strong>Session Duration:</strong> {Math.round(mediaPipeData.session_duration || 0)}s
-                            </div>
-                            <div>
-                              <strong>Good Posture Time:</strong> {Math.round(mediaPipeData.good_posture_seconds || 0)}s
-                            </div>
-                            <div>
-                              <strong>Hand Gesture Time:</strong> {Math.round(mediaPipeData.hand_gestures_seconds || 0)}s
-                            </div>
-                            <div>
-                              <strong>Speaking Activity:</strong> {Math.round(mediaPipeData.speaking_seconds || 0)}s
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Action Buttons */}
-                        <div className="flex space-x-3 pt-4 border-t">
-                          <Button
-                            onClick={() => downloadReport(report)}
-                            className="flex-1 bg-gradient-to-r from-blue-600 to-purple-600 text-white"
-                          >
-                            <Download className="w-4 h-4 mr-2" />
-                            Download Detailed Report
-                          </Button>
-                          
-                          <Button
-                            onClick={() => {
-                              const dataStr = JSON.stringify(report, null, 2)
-                              const dataUri = "data:application/json;charset=utf-8," + encodeURIComponent(dataStr)
-                              const exportFileDefaultName = `speech-report-data-${new Date().toISOString().split("T")[0]}.json`
-                              const linkElement = document.createElement("a")
-                              linkElement.setAttribute("href", dataUri)
-                              linkElement.setAttribute("download", exportFileDefaultName)
-                              linkElement.click()
-                            }}
-                            variant="outline"
-                            className="flex-1"
-                          >
-                            <FileText className="w-4 h-4 mr-2" />
-                            Export Raw Data
-                          </Button>
-                        </div>
-                      </div>
-                    );
-                  })()}
-                </CardContent>
-              </Card>
-            )}
+            
           </div>
         </div>
       </div>

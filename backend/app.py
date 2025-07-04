@@ -6,7 +6,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
 from report_db import insert_report,get_stats
-import os 
+import os  
 from key_manager import APIKeyManager
 import json
 import uuid
@@ -544,13 +544,20 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
                                 })
                     
                 elif message["type"] == "send_feedback":
+                    print(f"📝 Feedback received: {message['feedback']}")
                     if room_id in active_rooms:
                         if "feedbacks" not in active_rooms[room_id]:
                             active_rooms[room_id]["feedbacks"] = []
+                        
+                        # Store feedback in room
                         active_rooms[room_id]["feedbacks"].append(message["feedback"])
+                        print(f"📝 Total feedbacks in room: {len(active_rooms[room_id]['feedbacks'])}")
                     
-                    await broadcast_to_room(room_id, message, exclude=websocket)
-                
+                    # ✅ FIX: Broadcast feedback to all participants (not exclude sender)
+                    await broadcast_to_room(room_id, {
+                        "type": "send_feedback",
+                        "feedback": message["feedback"]
+                    })
                 elif message["type"] == "toggle_camera":
                     if room_id in active_rooms:
                         room = active_rooms[room_id]
