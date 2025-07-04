@@ -24,6 +24,8 @@ import {
   Eye,
   Volume2,
   Zap,
+  Download,
+  FileText
 } from "lucide-react"
 import Link from "next/link"
 import { webrtcService } from "@/lib/webrtc"
@@ -950,7 +952,58 @@ const debugWebRTCConnections = () => {
 
     setFeedbackMessage("")
   }
+    const downloadReport = (report: any) => {
+    if (!report) return
+    
+    const reportContent = `
+Group Speaking Session Report
+=============================
 
+Session Information:
+- Room: ${room?.name || 'Unknown Room'}
+- Date: ${new Date().toLocaleDateString()}
+- Speaker: ${report.participant_id || 'Unknown'}
+- Duration: ${Math.round(mediaPipeData.session_duration || 0)} seconds
+
+Performance Scores:
+===================
+- Overall Score: ${report.scores?.overall_score || 'N/A'}%
+- Posture Quality: ${report.scores?.posture_score || 'N/A'}%
+- Hand Gestures: ${report.scores?.gesture_score || 'N/A'}%
+- Speaking Activity: ${report.scores?.speaking_score || 'N/A'}%
+- Peer Feedback Score: ${report.scores?.peer_feedback_score || 'N/A'}%
+
+Peer Feedback Summary:
+=====================
+- Total Feedback Received: ${report.feedback_summary?.total_feedbacks || 0}
+- Positive Comments: ${report.feedback_summary?.positive_count || 0}
+- Constructive Comments: ${report.feedback_summary?.constructive_count || 0}
+
+AI Analysis:
+============
+${report.report || 'No detailed analysis available'}
+
+MediaPipe Technical Data:
+========================
+- Session Duration: ${mediaPipeData.session_duration || 0} seconds
+- Good Posture Time: ${mediaPipeData.good_posture_seconds || 0} seconds
+- Hand Gesture Time: ${mediaPipeData.hand_gestures_seconds || 0} seconds
+- Speaking Activity Time: ${mediaPipeData.speaking_seconds || 0} seconds
+
+Generated on: ${new Date().toLocaleString()}
+Report ID: ${report.participant_id || 'unknown'}_${Date.now()}
+    `
+    
+    const blob = new Blob([reportContent], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `group-speech-report-${report.participant_id || 'unknown'}-${new Date().toISOString().split('T')[0]}.txt`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
   const getPersonalReport = async () => {
     if (!room) {
       console.error("Cannot get personal report: room is null")
@@ -1670,51 +1723,126 @@ const debugWebRTCConnections = () => {
             )}
 
             {/* ADD THIS INDIVIDUAL REPORTS SECTION HERE - AFTER THE EXISTING PERFORMANCE REPORT CARD */}
-            {/* Individual Reports */}
+                        {/* Individual Performance Report with Download */}
             {participantReports.has(currentUser.id) && (
               <Card className="mt-6">
                 <CardHeader>
-                  <CardTitle>Your Individual Performance Report</CardTitle>
+                  <CardTitle className="flex items-center justify-between">
+                    <span>Your Individual Performance Report</span>
+                    <Button 
+                      onClick={() => downloadReport(participantReports.get(currentUser.id))}
+                      variant="outline"
+                      size="sm"
+                      className="flex items-center space-x-2"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>Download Report</span>
+                    </Button>
+                  </CardTitle>
                 </CardHeader>
                 <CardContent>
                   {(() => {
                     const report = participantReports.get(currentUser.id);
                     return (
-                      <div className="space-y-4">
+                      <div className="space-y-6">
+                        {/* Performance Scores Grid */}
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                          <div className="text-center">
+                          <div className="text-center p-4 bg-blue-50 rounded-lg">
                             <div className="text-2xl font-bold text-blue-600">{report.scores.posture_score}%</div>
                             <div className="text-sm text-gray-600">Posture</div>
                           </div>
-                          <div className="text-center">
+                          <div className="text-center p-4 bg-green-50 rounded-lg">
                             <div className="text-2xl font-bold text-green-600">{report.scores.gesture_score}%</div>
                             <div className="text-sm text-gray-600">Gestures</div>
                           </div>
-                          <div className="text-center">
+                          <div className="text-center p-4 bg-purple-50 rounded-lg">
                             <div className="text-2xl font-bold text-purple-600">{report.scores.speaking_score}%</div>
                             <div className="text-sm text-gray-600">Speaking</div>
                           </div>
-                          <div className="text-center">
+                          <div className="text-center p-4 bg-orange-50 rounded-lg">
                             <div className="text-2xl font-bold text-orange-600">{report.scores.overall_score}%</div>
                             <div className="text-sm text-gray-600">Overall</div>
                           </div>
                         </div>
                         
+                        {/* Peer Feedback Summary */}
                         <div className="bg-gray-50 p-4 rounded-lg">
-                          <h4 className="font-semibold mb-2">AI Analysis</h4>
-                          <p className="text-sm whitespace-pre-wrap">{report.report}</p>
+                          <h4 className="font-semibold mb-3">Peer Feedback Summary</h4>
+                          <div className="grid grid-cols-3 gap-4 text-center">
+                            <div>
+                              <div className="text-lg font-bold text-green-600">
+                                {report.feedback_summary.positive_count}
+                              </div>
+                              <div className="text-sm text-gray-600">Positive</div>
+                            </div>
+                            <div>
+                              <div className="text-lg font-bold text-orange-600">
+                                {report.feedback_summary.constructive_count}
+                              </div>
+                              <div className="text-sm text-gray-600">Constructive</div>
+                            </div>
+                            <div>
+                              <div className="text-lg font-bold text-blue-600">
+                                {report.feedback_summary.total_feedbacks}
+                              </div>
+                              <div className="text-sm text-gray-600">Total</div>
+                            </div>
+                          </div>
                         </div>
                         
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                          <div>
-                            <strong>Total Feedback:</strong> {report.feedback_summary.total_feedbacks}
+                        {/* AI Analysis Report */}
+                        <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                          <h4 className="font-semibold mb-3 text-blue-900">AI Performance Analysis</h4>
+                          <div className="text-sm text-blue-800 whitespace-pre-wrap leading-relaxed">
+                            {report.report}
                           </div>
-                          <div>
-                            <strong>Positive:</strong> {report.feedback_summary.positive_count}
+                        </div>
+                        
+                        {/* Technical Metrics */}
+                        <div className="bg-gray-50 p-4 rounded-lg">
+                          <h4 className="font-semibold mb-3">Technical Analysis Data</h4>
+                          <div className="grid grid-cols-2 gap-4 text-sm">
+                            <div>
+                              <strong>Session Duration:</strong> {Math.round(mediaPipeData.session_duration || 0)}s
+                            </div>
+                            <div>
+                              <strong>Good Posture Time:</strong> {Math.round(mediaPipeData.good_posture_seconds || 0)}s
+                            </div>
+                            <div>
+                              <strong>Hand Gesture Time:</strong> {Math.round(mediaPipeData.hand_gestures_seconds || 0)}s
+                            </div>
+                            <div>
+                              <strong>Speaking Activity:</strong> {Math.round(mediaPipeData.speaking_seconds || 0)}s
+                            </div>
                           </div>
-                          <div>
-                            <strong>Constructive:</strong> {report.feedback_summary.constructive_count}
-                          </div>
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="flex space-x-3 pt-4 border-t">
+                          <Button
+                            onClick={() => downloadReport(report)}
+                            className="flex-1 bg-gradient-to-r from-blue-600 to-purple-600 text-white"
+                          >
+                            <Download className="w-4 h-4 mr-2" />
+                            Download Detailed Report
+                          </Button>
+                          
+                          <Button
+                            onClick={() => {
+                              const dataStr = JSON.stringify(report, null, 2)
+                              const dataUri = "data:application/json;charset=utf-8," + encodeURIComponent(dataStr)
+                              const exportFileDefaultName = `speech-report-data-${new Date().toISOString().split("T")[0]}.json`
+                              const linkElement = document.createElement("a")
+                              linkElement.setAttribute("href", dataUri)
+                              linkElement.setAttribute("download", exportFileDefaultName)
+                              linkElement.click()
+                            }}
+                            variant="outline"
+                            className="flex-1"
+                          >
+                            <FileText className="w-4 h-4 mr-2" />
+                            Export Raw Data
+                          </Button>
                         </div>
                       </div>
                     );
