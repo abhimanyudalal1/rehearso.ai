@@ -1,9 +1,15 @@
 from motor.motor_asyncio import AsyncIOMotorClient
 import time
+import os
+from dotenv import load_dotenv
 
+# Load environment variables from .env file
+load_dotenv()
 
+# Get MongoDB URI from environment, fallback to localhost if not set
+MONGOOSE_URI = os.environ.get("MONGOOSE_URI")
 
-client = AsyncIOMotorClient("mongodb://localhost:27017")
+client = AsyncIOMotorClient(MONGOOSE_URI)
 db = client.speakai
 col = db.reports
 
@@ -40,3 +46,4 @@ async def get_stats():
         "average_speaking_score": round(average_speaking_score, 1),
         "maximum_total_score": maximum_total_score
     }
+

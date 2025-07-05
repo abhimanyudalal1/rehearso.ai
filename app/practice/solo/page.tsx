@@ -61,7 +61,7 @@ const [sessionScores, setSessionScores] = useState<{
   speaking_score: number;
 } | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
-  const timerRef = useRef<NodeJS.Timeout>()
+  const timerRef = useRef<NodeJS.Timeout | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const topics = [
     "The impact of social media on modern communication",
