@@ -8,6 +8,8 @@ import { Mic, Settings, LogOut, BarChart3, TrendingUp, Clock, Trophy, Brain, Tar
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import Link from "next/link"
 
+import ReactMarkdown from 'react-markdown'
+
 // Chart.js imports - you'll need to install: npm install chart.js react-chartjs-2
 import {
   Chart as ChartJS,
@@ -392,22 +394,31 @@ export default function DetailedAnalytics() {
           </CardContent>
         </Card>
 
-        {/* Performance Summary */}
-        <Card className="bg-gradient-to-r from-blue-600 to-purple-600 text-white">
-          <CardHeader>
-            <CardTitle className="text-xl">📋 Performance Summary</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {isSummaryLoading ? (
-              <div className="flex items-center space-x-2">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                <p className="text-blue-100">Loading detailed summary...</p>
-              </div>
-            ) : (
-              <p className="text-blue-100 leading-relaxed">{summary}</p>
-            )}
-          </CardContent>
-        </Card>
+
+<Card className="bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg">
+  <CardHeader>
+    <CardTitle className="text-xl flex items-center">
+      <Trophy className="w-5 h-5 mr-2 text-white" />
+      AI Performance Summary
+    </CardTitle>
+  </CardHeader>
+  <CardContent>
+    {isSummaryLoading ? (
+      <div className="flex items-center space-x-2">
+        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+        <p className="text-blue-100">Generating personalized insights...</p>
+      </div>
+    ) : summary ? (
+      <div className="prose prose-sm prose-invert max-w-none text-blue-100">
+        <ReactMarkdown>{summary}</ReactMarkdown>
+      </div>
+    ) : (
+      <p className="text-red-100">Unable to generate summary. Try again later.</p>
+    )}
+  </CardContent>
+</Card>
+
+
       </div>
     </div>
   )
