@@ -25,6 +25,7 @@ import Link from "next/link"
 import { aiAnalysis, type SpeechAnalysis } from "@/lib/ai-analysis"
 import { speechRecognition, type SpeechMetrics } from "@/lib/speech-recognition"
 import { db } from "@/lib/database"
+import { useStreamlitControl } from "@/lib/useStreamlitControl"
 
 export default function SoloPracticePage() {
   const [currentStep, setCurrentStep] = useState<"setup" | "topic-selection" | "preparation" | "speaking" | "feedback">(
@@ -61,7 +62,7 @@ const [sessionScores, setSessionScores] = useState<{
   speaking_score: number;
 } | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
-  const timerRef = useRef<NodeJS.Timeout>()
+  const timerRef = useRef<NodeJS.Timeout | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const topics = [
     "The impact of social media on modern communication",
@@ -85,6 +86,17 @@ const [sessionScores, setSessionScores] = useState<{
   const [aiTopics, setAiTopics] = useState<string[]>([])
   const [selectedAiTopic, setSelectedAiTopic] = useState("")
   const [isLoadingTopics, setIsLoadingTopics] = useState(false)
+
+  // Add Streamlit control
+  const { 
+    isConnected: streamlitConnected, 
+    isStreamlitRunning, 
+    isStreamlitReady,
+    startStreamlit, 
+    stopStreamlit,
+    checkReady,
+    lastMessage: streamlitMessage 
+  } = useStreamlitControl()
 
   // Update the live feedback generation to use AI
   useEffect(() => {
@@ -247,6 +259,34 @@ useEffect(() => {
   // Update the startRecording function to initialize camera and MediaPipe
   const startRecording = async () => {
     try {
+      // Start Streamlit service and wait for it to be ready
+      console.log("Starting Streamlit service...")
+      startStreamlit()
+      
+      // Wait for Streamlit to be running and ready before proceeding
+      const waitForStreamlit = () => {
+        return new Promise<void>((resolve) => {
+          const checkInterval = setInterval(async () => {
+            const ready = await checkReady()
+            if (ready) {
+              clearInterval(checkInterval)
+              console.log("Streamlit is ready and responsive!")
+              resolve()
+            }
+          }, 1000)
+          
+          // Timeout after 20 seconds
+          setTimeout(() => {
+            clearInterval(checkInterval)
+            console.log("Streamlit startup timeout, proceeding anyway...")
+            resolve()
+          }, 20000)
+        })
+      }
+      
+      // Wait for Streamlit to start
+      await waitForStreamlit()
+      
       // Request camera and microphone permissions
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
@@ -262,13 +302,13 @@ useEffect(() => {
       setCurrentStep("speaking")
       setTimeRemaining(speakingTime[0] * 60)
 
-      // Auto-start MediaPipe analysis
+      // Auto-start MediaPipe analysis after a longer delay to ensure Streamlit is fully loaded
       setTimeout(() => {
-        const iframe = document.querySelector('iframe[title="MediaPipe Analysis"]') as HTMLIFrameElement
+        const iframe = document.querySelector('iframe[title="Streamlit Audio Analysis"]') as HTMLIFrameElement
         if (iframe && iframe.contentWindow) {
           iframe.contentWindow.postMessage({ action: "startAnalysis" }, "*")
         }
-      }, 1000)
+      }, 3000)
     } catch (error) {
       console.error("Error starting recording:", error)
       alert(
@@ -381,6 +421,9 @@ Generated on: ${new Date().toLocaleString()}
   setIsRecording(false)
   stopMediaDevices()
   
+  // Stop Streamlit service
+  stopStreamlit()
+  
   // Show spinner for at least 3 seconds
   setTimeout(() => {
     setIsEndingSession(false)
@@ -479,6 +522,9 @@ const resetSession = () => {
 
   // Stop media devices when resetting
   stopMediaDevices()
+  
+  // Stop Streamlit service when resetting
+  stopStreamlit()
 }
 
   if (currentStep === "setup") {
@@ -551,6 +597,30 @@ const resetSession = () => {
                       {isMicOn ? "On" : "Off"}
                     </Button>
                   </div>
+                </div>
+
+                {/* Streamlit Service Status */}
+                <div className="bg-gray-50 p-4 rounded-lg border">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <div className={`w-3 h-3 rounded-full ${
+                        isStreamlitReady ? 'bg-green-500' : 
+                        isStreamlitRunning ? 'bg-yellow-500' : 
+                        streamlitConnected ? 'bg-orange-500' : 'bg-red-500'
+                      }`}></div>
+                      <span className="text-sm font-medium">Analysis Service</span>
+                    </div>
+                    <div className="text-sm text-gray-600">
+                      {isStreamlitReady ? 'Ready' : 
+                       isStreamlitRunning ? 'Starting...' : 
+                       'Stopped'}
+                    </div>
+                  </div>
+                  {streamlitMessage && (
+                    <div className="mt-2 text-xs text-gray-500">
+                      {streamlitMessage.message}
+                    </div>
+                  )}
                 </div>
 
                 <div className="bg-blue-50 p-4 rounded-lg">
@@ -1169,19 +1239,35 @@ if (currentStep === "speaking") {
                 </h3>
               </div>
               <div className="h-full relative">
-                <iframe
-                  src="http://localhost:8501/"
-                  className="w-full h-full border-0"
-                  title="Streamlit Audio Analysis"
-                  onError={() => {
-                    console.log("Streamlit connection failed, trying localhost...")
-                  }}
-                />
+                {isStreamlitReady ? (
+                  <iframe
+                    src="http://localhost:8501/"
+                    className="w-full h-full border-0"
+                    title="Streamlit Audio Analysis"
+                    onError={() => {
+                      console.log("Streamlit connection failed")
+                    }}
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center bg-gray-100">
+                    <div className="text-center">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+                      <p className="text-gray-600">
+                        {isStreamlitRunning ? "Starting audio analysis interface..." : "Starting audio analysis service..."}
+                      </p>
+                      <p className="text-sm text-gray-500 mt-2">Please wait while Streamlit initializes</p>
+                    </div>
+                  </div>
+                )}
                 <div className="absolute top-4 left-4 right-4 bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
                   <p>
                     <strong>Audio Analysis:</strong> Real-time pitch, loudness, and tempo tracking
                   </p>
-                  <p className="text-xs mt-1">If graphs don't appear, ensure Streamlit is running on port 8501</p>
+                  {!isStreamlitReady && (
+                    <p className="text-xs mt-1 text-orange-600">
+                      {isStreamlitRunning ? "Interface loading..." : "Service starting up..."}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>

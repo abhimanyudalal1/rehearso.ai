@@ -11,6 +11,9 @@ from key_manager import APIKeyManager
 import json
 import uuid
 from typing import Dict, List,Optional
+import psutil
+import subprocess
+import asyncio
 from dotenv import load_dotenv
 load_dotenv()
 API_KEY = os.getenv("GOOGLE_API")
@@ -713,3 +716,292 @@ async def submit_group_member_data(request: Request):
         
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+# Global variable to track Streamlit process
+streamlit_process: Optional[subprocess.Popen] = None
+
+def check_streamlit_processes():
+    """Check for running Streamlit processes"""
+    try:
+        running_processes = []
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                # Check if it's a Python process running Streamlit
+                if proc.info['name'] == 'python.exe' and proc.info['cmdline']:
+                    cmdline = ' '.join(proc.info['cmdline'])
+                    if 'streamlit' in cmdline.lower() and 'run' in cmdline.lower():
+                        running_processes.append(str(proc.info['pid']))
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        
+        return running_processes
+    except Exception as e:
+        print(f"Error checking for Streamlit processes: {e}")
+        return []
+
+def kill_existing_streamlit_processes():
+    """Kill any existing Streamlit processes to ensure clean state"""
+    try:
+        killed_count = 0
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                # Check if it's a Python process running Streamlit
+                if proc.info['name'] == 'python.exe' and proc.info['cmdline']:
+                    cmdline = ' '.join(proc.info['cmdline'])
+                    if 'streamlit' in cmdline.lower() and 'run' in cmdline.lower():
+                        proc.terminate()
+                        proc.wait(timeout=5)
+                        killed_count += 1
+                        print(f"Killed Streamlit process: {proc.info['pid']}")
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+                # Try force kill if terminate doesn't work
+                try:
+                    proc.kill()
+                    killed_count += 1
+                except:
+                    pass
+        
+        if killed_count > 0:
+            print(f"Killed {killed_count} Streamlit processes")
+            return True
+        else:
+            print("No Streamlit processes found")
+            return False
+    except Exception as e:
+        print(f"Error killing Streamlit processes: {e}")
+        return False
+
+# Startup event to ensure clean state
+@app.on_event("startup")
+async def startup_event():
+    global streamlit_process
+    print("FastAPI startup: Ensuring clean Streamlit state...")
+    kill_existing_streamlit_processes()
+    streamlit_process = None
+    print("FastAPI startup complete")
+
+# WebSocket endpoint for Streamlit service control
+@app.websocket("/ws/streamlit-control")
+async def streamlit_control_websocket(websocket: WebSocket):
+    await websocket.accept()
+    global streamlit_process
+    
+    try:
+        while True:
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            command = message.get("command")
+            
+            if command == "start":
+                # First ensure no other Streamlit processes are running
+                kill_existing_streamlit_processes()
+                await asyncio.sleep(1)
+                
+                if streamlit_process is None or streamlit_process.poll() is not None:
+                    # Start Streamlit service
+                    try:
+                        print(f"Starting Streamlit process...")
+                        # Get the directory where this script is located
+                        backend_dir = os.path.dirname(os.path.abspath(__file__))
+                        streamlit_process = subprocess.Popen([
+                            "streamlit", "run", "streamlit_true.py",
+                            "--server.port", "8501",
+                            "--server.address", "localhost",
+                            "--server.headless", "true",
+                            "--browser.gatherUsageStats", "false"
+                        ], cwd=backend_dir)
+                        
+                        # Wait a moment for Streamlit to start
+                        await asyncio.sleep(3)
+                        
+                        if streamlit_process.poll() is None:
+                            print(f"Streamlit started successfully with PID: {streamlit_process.pid}")
+                            await websocket.send_text(json.dumps({
+                                "status": "success",
+                                "message": "Streamlit service started successfully",
+                                "pid": streamlit_process.pid
+                            }))
+                        else:
+                            print("Streamlit process terminated immediately")
+                            await websocket.send_text(json.dumps({
+                                "status": "error",
+                                "message": "Failed to start Streamlit service"
+                            }))
+                    except Exception as e:
+                        print(f"Error starting Streamlit: {e}")
+                        await websocket.send_text(json.dumps({
+                            "status": "error",
+                            "message": f"Error starting Streamlit: {str(e)}"
+                        }))
+                else:
+                    await websocket.send_text(json.dumps({
+                        "status": "info",
+                        "message": "Streamlit service is already running",
+                        "pid": streamlit_process.pid
+                    }))
+            
+            elif command == "stop":
+                try:
+                    # Kill all Streamlit processes, not just the tracked one
+                    print("Stopping Streamlit service...")
+                    kill_existing_streamlit_processes()
+                    
+                    # Also try to stop the tracked process if it exists
+                    if streamlit_process and streamlit_process.poll() is None:
+                        try:
+                            streamlit_process.terminate()
+                            streamlit_process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            streamlit_process.kill()
+                            streamlit_process.wait()
+                    
+                    streamlit_process = None
+                    print("Streamlit service stopped successfully")
+                    await websocket.send_text(json.dumps({
+                        "status": "success",
+                        "message": "Streamlit service stopped successfully"
+                    }))
+                except Exception as e:
+                    print(f"Error stopping Streamlit: {e}")
+                    await websocket.send_text(json.dumps({
+                        "status": "error",
+                        "message": f"Error stopping Streamlit: {str(e)}"
+                    }))
+            
+            elif command == "status":
+                # Check both tracked process and any running Streamlit processes
+                try:
+                    running_processes = check_streamlit_processes()
+                    
+                    if streamlit_process and streamlit_process.poll() is None:
+                        await websocket.send_text(json.dumps({
+                            "status": "running",
+                            "message": "Streamlit service is running (tracked)",
+                            "pid": streamlit_process.pid
+                        }))
+                    elif running_processes:
+                        # There are untracked Streamlit processes
+                        await websocket.send_text(json.dumps({
+                            "status": "running",
+                            "message": f"Streamlit service is running (untracked) - PIDs: {', '.join(running_processes)}",
+                            "pid": running_processes[0]
+                        }))
+                    else:
+                        await websocket.send_text(json.dumps({
+                            "status": "stopped",
+                            "message": "Streamlit service is not running"
+                        }))
+                except Exception as e:
+                    print(f"Error checking Streamlit status: {e}")
+                    await websocket.send_text(json.dumps({
+                        "status": "error",
+                        "message": f"Error checking status: {str(e)}"
+                    }))
+            
+            else:
+                await websocket.send_text(json.dumps({
+                    "status": "error",
+                    "message": f"Unknown command: {command}"
+                }))
+                
+    except WebSocketDisconnect:
+        print("Streamlit control WebSocket disconnected")
+    except Exception as e:
+        print(f"Error in Streamlit control WebSocket: {e}")
+
+# Cleanup function to stop Streamlit on app shutdown
+@app.on_event("shutdown")
+async def shutdown_event():
+    global streamlit_process
+    if streamlit_process and streamlit_process.poll() is None:
+        try:
+            streamlit_process.terminate()
+            streamlit_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            streamlit_process.kill()
+            streamlit_process.wait()
+        except Exception as e:
+            print(f"Error during shutdown: {e}")
+
+# Health check endpoint for Streamlit service
+@app.get("/streamlit/health")
+async def streamlit_health():
+    global streamlit_process
+    
+    try:
+        running_processes = check_streamlit_processes()
+        
+        if streamlit_process and streamlit_process.poll() is None:
+            return {
+                "status": "running", 
+                "pid": streamlit_process.pid,
+                "tracked": True
+            }
+        elif running_processes:
+            return {
+                "status": "running", 
+                "pid": running_processes[0],
+                "tracked": False,
+                "all_pids": running_processes
+            }
+        else:
+            return {"status": "stopped"}
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+# Manual endpoint to force stop any Streamlit processes
+@app.post("/streamlit/force-stop")
+async def force_stop_streamlit():
+    """Force stop any running Streamlit processes"""
+    global streamlit_process
+    
+    try:
+        killed = kill_existing_streamlit_processes()
+        streamlit_process = None
+        
+        return {
+            "status": "success",
+            "message": f"Force stop completed. Processes killed: {killed}",
+            "killed": killed
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+# Enhanced health check that verifies Streamlit is actually responding
+@app.get("/streamlit/ready")
+async def streamlit_ready():
+    """Check if Streamlit is not just running, but actually ready to serve requests"""
+    global streamlit_process
+    
+    try:
+        # First check if process is running
+        running_processes = check_streamlit_processes()
+        
+        if not (streamlit_process and streamlit_process.poll() is None) and not running_processes:
+            return {"status": "stopped", "ready": False}
+        
+        # Try to make an actual HTTP request to Streamlit
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                response = await client.get("http://localhost:8501/healthz")
+                if response.status_code == 200:
+                    return {"status": "running", "ready": True, "responsive": True}
+                else:
+                    return {"status": "running", "ready": False, "responsive": False}
+        except Exception:
+            # Streamlit is running but not responsive yet
+            return {"status": "running", "ready": False, "responsive": False}
+            
+    except Exception as e:
+        return {
+            "status": "error",
+            "ready": False,
+            "message": str(e)
+        }
