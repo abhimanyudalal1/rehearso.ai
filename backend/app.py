@@ -254,6 +254,29 @@ async def create_room(room_data: RoomData):
     """Create a new room"""
     room_id = str(uuid.uuid4())[:8].upper()
     
+    # Start Streamlit subprocess immediately when room is created
+    # This gives it maximum time to initialize before speaking begins
+    global streamlit_process
+    if streamlit_process is None or streamlit_process.poll() is not None:
+        try:
+            print(f"🚀 Starting Streamlit process for new room {room_id}...")
+            # Get the directory where this script is located
+            backend_dir = os.path.dirname(os.path.abspath(__file__))
+            streamlit_process = subprocess.Popen([
+                "streamlit", "run", "streamlit_true.py",
+                "--server.port", "8501",
+                "--server.address", "localhost",
+                "--server.headless", "true",
+                "--browser.gatherUsageStats", "false"
+            ], cwd=backend_dir)
+            
+            print(f"✅ Streamlit started early with PID: {streamlit_process.pid}")
+            
+        except Exception as e:
+            print(f"❌ Error starting Streamlit during room creation: {e}")
+    else:
+        print(f"ℹ️ Streamlit already running with PID: {streamlit_process.pid}")
+    
     # Store room in active_rooms
     active_rooms[room_id] = {
         "id": room_id,
@@ -439,6 +462,16 @@ async def websocket_room_endpoint(websocket: WebSocket, room_id: str):
  
                 elif message["type"] == "start_session":
                     print(f"🎬 Starting session for room {room_id}")
+                    
+                    # Streamlit should already be running since room creation
+                    # Just verify it's still alive
+                    global streamlit_process
+                    if streamlit_process and streamlit_process.poll() is None:
+                        print(f"✅ Streamlit confirmed running with PID: {streamlit_process.pid}")
+                    else:
+                        print(f"⚠️ Warning: Streamlit process not found or stopped")
+                    
+                    # Proceed with session startup
                     if room_id in active_rooms:
                         room = active_rooms[room_id]
                         room["status"] = "active"
