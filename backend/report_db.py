@@ -10,7 +10,7 @@ load_dotenv()
 MONGOOSE_URI = os.environ.get("MONGOOSE_URI")
 
 client = AsyncIOMotorClient(MONGOOSE_URI)
-db = client.speakai
+db = client.pitchperfect
 col = db.reports
 
 async def insert_report(report:str,posture_score,gesture_score,speaking_score,total_score):

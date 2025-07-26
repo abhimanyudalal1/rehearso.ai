@@ -194,28 +194,32 @@ async def get_my_reports():
 
 @app.websocket("/ws/audio")
 async def websocket_endpoint(websocket: WebSocket):
+    print("=== NEW WEBSOCKET CONNECTION TO /ws/audio ===")
     await manager.connect(websocket)
+    print(f"WebSocket connected. Total connections: {len(manager.active_connections)}")
     
     try:
         while True:
             try:
                 data = await websocket.receive_text()
-                print(type(data))
-                print(f"Received text: {data}")
+                print(f"[WEBSOCKET] Received text (type: {type(data)}): {data}")
                 
                 res = await call_gemini(data)
+                print(f"[GEMINI] Response: {res}")
                     
-                print(res)
                 await manager.send_text(res, websocket)
+                print(f"[WEBSOCKET] Sent response back to client")
                     
             except WebSocketDisconnect:
+                print("[WEBSOCKET] Client disconnected")
                 await manager.disconnect(websocket)
                 break
             except Exception as e: 
-                print(f"Error: {str(e)}")
+                print(f"[WEBSOCKET] Error: {str(e)}")
                 break
     finally:
         await manager.disconnect(websocket)
+        print(f"[WEBSOCKET] Connection cleanup complete. Remaining connections: {len(manager.active_connections)}")
 
 # ADD: Enhanced room data structure and management
 active_rooms: Dict[str, dict] = {}

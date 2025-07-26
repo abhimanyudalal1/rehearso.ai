@@ -34,7 +34,7 @@ export default function GroupPracticePage() {
     roomName: "",
     maxParticipants: 6,
     topicCategory: "Everyday Conversations",
-    timePerSpeaker: 2,
+    timePerSpeaker: 0.5,
     privacy: "public",
     description: "",
   })
